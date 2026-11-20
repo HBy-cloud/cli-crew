@@ -95,22 +95,13 @@ Start a new AI CLI session in your target project. Run `crew detect` there to se
 
 ## Update
 
-Open PowerShell in the **original cli-crew clone** (the folder containing both `crew/` and `scripts/`). The skill points to files in this clone; the standard installation of the `crew` executable is a separate copy managed by uv.
+In File Explorer, open the **cli-crew folder you downloaded during installation**. You should see both `crew` and `scripts` inside. Type `pwsh` in the Explorer address bar, press Enter, and paste this line into the window that opens:
 
-1. Fetch the latest source. If Git reports a conflict or cannot fast-forward, stop here and resolve the Git issue before reinstalling.
+```powershell
+git pull --ff-only && uv tool install --reinstall ./crew && crew --version
+```
 
-   ```powershell
-   git pull --ff-only
-   ```
-
-2. Reinstall the command from the updated source and check that it starts:
-
-   ```powershell
-   uv tool install --reinstall ./crew
-   crew --version
-   ```
-
-3. Start a **new AI CLI session** in your target project to load the updated skill. Existing registrations already point at the updated files. If a registration is missing, restore just that client, for example `pwsh -File scripts/install-skill.ps1 -Agents codex`. Running the installer without `-Agents` registers all three clients.
+When the last line shows `crew` and a version number, the update is complete. Start a new AI CLI session in your working project to use it.
 
 ## Uninstall
 

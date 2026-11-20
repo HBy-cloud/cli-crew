@@ -95,22 +95,13 @@ crew --version
 
 ## 업데이트
 
-**처음 설치할 때 복제한 cli-crew 폴더**에서 PowerShell을 여세요. `crew/`와 `scripts/`가 함께 있는 곳입니다. 스킬은 이 폴더의 파일을 가리키고, 기본 설치 방식에서 `crew` 실행 파일은 uv가 별도로 설치합니다.
+파일 탐색기에서 처음 설치할 때 받은 **cli-crew 폴더**를 여세요. 안에 `crew`와 `scripts` 폴더가 보이면 맞습니다. 탐색기 주소창에 `pwsh`를 입력하고 Enter를 누른 뒤, 열린 창에 아래 한 줄을 붙여넣으세요.
 
-1. 최신 소스를 받습니다. Git이 충돌을 보고하거나 fast-forward할 수 없다고 하면, 재설치 전에 그 문제부터 해결하세요.
+```powershell
+git pull --ff-only && uv tool install --reinstall ./crew && crew --version
+```
 
-   ```powershell
-   git pull --ff-only
-   ```
-
-2. 내려받은 소스로 명령을 다시 설치하고 실행되는지 확인합니다.
-
-   ```powershell
-   uv tool install --reinstall ./crew
-   crew --version
-   ```
-
-3. 실제 작업할 프로젝트에서 **새 AI CLI 세션**을 여세요. 기존 스킬 등록은 이미 업데이트된 파일을 가리킵니다. 등록이 사라진 경우에만 해당 클라이언트를 다시 등록하세요. 예를 들어 Codex만 복구하려면 `pwsh -File scripts/install-skill.ps1 -Agents codex`를 실행합니다. `-Agents`를 생략하면 세 클라이언트 모두 등록됩니다.
+마지막 줄에 `crew`와 버전 번호가 뜨면 업데이트가 끝났습니다. 작업하던 프로젝트에서 새 AI CLI 세션을 열어 계속 사용하세요.
 
 ## 제거
 
