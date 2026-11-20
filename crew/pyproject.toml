@@ -1,0 +1,17 @@
+[project]
+name = "cli-crew"
+version = "0.1.0"
+description = "Delegate tasks from a main AI CLI to non-interactive worker CLIs (codex, agy, claude) with verification and records."
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+crew = "crew.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

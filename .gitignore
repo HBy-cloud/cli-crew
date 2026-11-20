@@ -1,0 +1,32 @@
+__pycache__/
+*.egg-info/
+build/
+dist/
+.venv/
+.agent-runs/
+crew/tests/_work/
+
+# Local development records
+/handoffs/
+/docs/research/
+/docs/SPEC_DRAFT.md
+/docs/DEV_PLAN.md
+/docs/original-requirements.md
+
+# Local credentials, agent settings, and logs
+.env
+.env.*
+!.env.example
+secrets/
+credentials.json
+.git-credentials
+id_rsa
+id_ed25519
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+.claude/settings.local.json
+*.log

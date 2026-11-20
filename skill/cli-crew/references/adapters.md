@@ -1,0 +1,27 @@
+# Worker CLI adapters (reference)
+
+`crew` assembles these commands; you normally do not run them yourself. Verified on Windows 11 with
+codex-cli 0.171.0, agy 1.5.13, Claude Code 2.1.329 (2026-11-20). Re-verify after CLI upgrades.
+
+| agent | read | write | prompt | evidence |
+|---|---|---|---|---|
+| codex | `codex exec -s read-only -C <root> [--add-dir D] --skip-git-repo-check --json -o <result> -c model_reasoning_effort="<E>" -` | `-s workspace-write` | stdin | `-o` file, JSONL (`thread.started` → thread_id), `~/.codex/sessions` rollouts |
+| agy | `agy --mode plan --effort <E> --output-format stream-json --print-timeout <T>m [--add-dir D] --print=<instruction>` | refused by crew | short instruction pointing at `.agent-runs/<id>.prompt.md` | stream-json (`init.model`, `step_update`, `result`) |
+| claude | `claude -p --restricted --permission-mode plan --permission-prompts none --output-format json --no-session-persistence --effort <E> [--add-dir D]` | `--permission-mode acceptEdits` | stdin | JSON (`result`, `is_error`, `permission_denials`, `subagent_stats`, `total_cost_usd`) |
+
+## Known behaviour
+- Safe-mode workers cannot run shell commands (codex sandbox `CreateProcessAsUserW` denied; agy print mode
+  auto-denies commands; claude `--restricted` has no shell). Main runs tests/builds.
+- Exit code 0 does not mean success. agy prints `jetski: no output produced ... auto-denied` with exit 0.
+- `--add-dir` grants write access in codex/claude write modes, so crew forbids it in write mode.
+- agy can write outside cwd in accept-edits mode. Crew refuses agy write tasks before launch.
+- All three can spawn built-in subagents non-interactively; codex cannot disable it via flags.
+  crew detects use: codex child rollouts (`parent_thread_id`), agy `invoke_subagent` steps,
+  claude `subagent_stats.spawned`.
+- codex fails to write when its cwd is in the OS temp folder; crew refuses temp roots.
+- Reading: codex read-only and agy plan can read files anywhere the user can; claude `--restricted` is confined
+  to the project and `--add-dir`. "Do not open secret files" is only an instruction for codex/agy.
+- claude workers use the user's default Claude model (observed claude-opus-5-5, ~0.08 USD for a tiny read).
+- Timeouts: agy `--print-timeout` (exit 3); codex/claude are killed by crew as a process tree.
+- Session logs: codex keeps rollouts (`--ephemeral` disables but blocks subagent checks); agy keeps
+  conversations (~0.5 MB each, no off switch); claude keeps none with `--no-session-persistence`.
