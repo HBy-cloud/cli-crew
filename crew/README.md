@@ -12,6 +12,10 @@ uv tool install -e .
 crew --version
 ```
 
+## Initialize project guidance
+
+Run `crew init` from the target project. It creates a starter `AGENTS.md` only when the root has no supported instruction file. The skill adds verified project details on first use.
+
 ## Typical flow (run inside a project)
 ```
 crew detect --paths src/

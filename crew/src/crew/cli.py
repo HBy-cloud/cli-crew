@@ -18,7 +18,7 @@ from crew.common import (
     home_dir, is_drive_root, load_config, now, now_iso, parse_iso, read_json, read_text, real, rel_to,
     same_path,
 )
-from crew.safety import instruction_dirs, scan_instructions
+from crew.safety import INSTRUCTION_FILES, instruction_dirs, scan_instructions
 from crew.subagents import path_size, verify_codex_rollout_for_delete
 
 API_KEY_VARS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY")
@@ -52,6 +52,53 @@ def latest_handoff(root: Path) -> Path | None:
         return None
     files = [p for p in d.rglob("*.md") if p.is_file()]
     return max(files, key=lambda p: p.stat().st_mtime) if files else None
+
+
+def cmd_init(a) -> int:
+    root, _ = _root_and_runs()
+    if os.environ.get("AGENT_ROLE") == "WORKER":
+        raise CrewError(EXIT_GUARD, "project initialization is a main-agent task")
+    for name in INSTRUCTION_FILES:
+        path = root / name
+        if os.path.lexists(path):
+            if not path.is_file():
+                raise CrewError(EXIT_GUARD, f"cannot use existing instruction path: {path}")
+            print(f"Existing instructions: {path}")
+            return EXIT_OK
+
+    names = ("README.md", "CONTRIBUTING.md", "docs/SPEC.md", "pyproject.toml", "package.json",
+             "Cargo.toml", "go.mod", "pubspec.yaml", "Makefile")
+    sources = [name for name in names if (root / name).is_file()]
+    folders = [name for name in ("src", "lib", "tests", "docs") if (root / name).is_dir()]
+    lines = ["# Project instructions", ""]
+    if sources:
+        lines += ["Project references: " + ", ".join(f"`{name}`" for name in sources) + ".", ""]
+    if folders:
+        lines += ["Project directories: " + ", ".join(f"`{name}/`" for name in folders) + ".", ""]
+    lines += [
+        "## Starting or resuming work", "",
+        "Read the applicable instructions and the requirements for this task. If this is a Git project,",
+        "check the working tree. Read the latest relevant handoff when available and compare its claims",
+        "with the current files. Preserve existing edits and check ownership before editing work in progress.", "",
+        "## Working with other agents", "",
+        "The main agent owns the goal, selects bounded tasks for workers when useful, and verifies their",
+        "results. Keep workers within the agreed scope and follow project restrictions on external sharing.", "",
+        "## Verification and handoff", "",
+        "Use documented build and test commands when available. Record what actually ran, the results,",
+        "and any checks that remain unverified. Follow the existing handoff convention; preserve prior",
+        "records and give the next session the changed paths, open issues, and next action.",
+    ]
+    path = root / "AGENTS.md"
+    try:
+        with path.open("x", encoding="utf-8", newline="\n") as out:
+            out.write("\n".join(lines) + "\n")
+    except FileExistsError:
+        if not path.is_file():
+            raise CrewError(EXIT_GUARD, f"cannot use existing instruction path: {path}")
+        print(f"Existing instructions: {path}")
+        return EXIT_OK
+    print(f"Created instructions: {path}")
+    return EXIT_OK
 
 
 def cmd_detect(a) -> int:
@@ -534,6 +581,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     def add_json(sp):
         sp.add_argument("--json", action="store_true", help="machine-readable output")
+
+    sp = sub.add_parser("init", help="create project instructions if none exist at the project root")
+    sp.set_defaults(func=cmd_init)
 
     sp = sub.add_parser("detect", help="inspect CLIs, project root, instructions, active tasks")
     sp.add_argument("--paths", nargs="*", help="target paths whose instruction files should also be scanned")

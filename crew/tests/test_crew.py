@@ -116,6 +116,39 @@ class Base(unittest.TestCase):
 
 # ------------------------------------------------------------ contract
 
+class InitTests(Base):
+    def test_init_creates_once_then_preserves_user_edits(self):
+        (self.root / "tests").mkdir()
+        self.assertEqual(crew("init")[0], 0)
+        path = self.root / "AGENTS.md"
+        guide = path.read_text(encoding="utf-8")
+        self.assertIn("`README.md`", guide)
+        self.assertIn("`tests/`", guide)
+        self.assertNotIn("`package.json`", guide)
+        path.write_text("maintainer edits", encoding="utf-8")
+        self.assertEqual(crew("init")[0], 0)
+        self.assertEqual(path.read_text(encoding="utf-8"), "maintainer edits")
+
+    def test_init_respects_alternate_guides_from_subdirectory(self):
+        sub = self.root / "src"
+        sub.mkdir()
+        os.chdir(sub)
+        for name in ("GEMINI.md", "CLAUDE.md"):
+            with self.subTest(name=name):
+                guide = self.root / name
+                guide.write_text("existing", encoding="utf-8")
+                self.assertEqual(crew("init")[0], 0)
+                self.assertFalse((self.root / "AGENTS.md").exists())
+                self.assertFalse((sub / "AGENTS.md").exists())
+                self.assertEqual(guide.read_text(encoding="utf-8"), "existing")
+                guide.unlink()
+
+    def test_init_rejects_worker(self):
+        os.environ["AGENT_ROLE"] = "WORKER"
+        self.assertEqual(crew("init")[0], 3)
+        self.assertFalse((self.root / "AGENTS.md").exists())
+
+
 class ContractTests(Base):
     def check(self, p: Path, *extra) -> tuple[int, str]:
         code, out, _ = crew("contract", "check", str(p), *extra)

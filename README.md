@@ -4,6 +4,12 @@
 
 Give your AI coding assistant a goal. The **cli-crew skill** helps it decide what to do itself, what to delegate to another CLI, and how to verify the result. The **`crew` command** runs those workers and records what happened.
 
+![A delegated task in cli-crew](docs/assets/workflow.svg)
+
+## First use in a project
+
+For tasks that allow edits, the skill runs `crew init` at the project root. If no root-level `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md` exists, the command creates a starter `AGENTS.md`. The main assistant then adds project-specific commands and conventions supported by the repository. Existing guides are reused. For setup only, ask: “Prepare project instructions from this repository.”
+
 ## Example
 
 From the project you want to work on, ask your assistant:
@@ -23,6 +29,18 @@ Each worker gets a **task contract** with an objective, a completion condition, 
 | Antigravity (`agy`) | Investigation and review only |
 
 Delegation can send project content to the selected CLI’s provider and use its configured account. The main assistant checks project instructions before delegation. After a run, `crew` reports changes detected inside the project and saves the worker’s result under `.agent-runs/`. The main assistant checks the evidence and records whether it accepts the work.
+
+## Picking up work in another CLI
+
+Run this from the project before ending a session. Replace `codex` and `csv-export` with the current main agent and task name.
+
+```powershell
+crew handoff --agent codex --task csv-export --status "In progress" --lang en
+```
+
+The command creates a dated Markdown draft under `handoffs/` (or an existing `handoff/` directory). It includes the selected runs and any recorded main verification. Complete the draft with the remaining work and the first check the next session should run.
+
+Open the **same working copy** in the next CLI and ask it to read the latest handoff and compare it with the current Git state. This is a manual handoff. Automatic main-agent switching and end-to-end cross-CLI resumption are listed as future work in the [specification, T-06](docs/SPEC.md). This repository ignores `handoffs/` and `.agent-runs/`, so a fresh clone does not include those local records.
 
 ## Install on Windows
 

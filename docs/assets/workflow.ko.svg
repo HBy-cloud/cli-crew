@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="312" viewBox="0 0 900 312" role="img" aria-labelledby="title">
+<title id="title">cli-crew의 위임 작업</title>
+<rect width="900" height="312" rx="18" fill="#10262b"/>
+<text x="32" y="42" fill="#eff9f1" font-family="Segoe UI, Malgun Gothic, sans-serif" font-size="25" font-weight="600">cli-crew의 위임 작업</text>
+<rect x="32" y="70" width="252" height="132" rx="12" fill="#1c393e" stroke="#426368"/>
+<text x="50" y="101" fill="#9ae2c5" font-family="Consolas, monospace" font-size="17" font-weight="600">MAIN</text>
+<text x="50" y="143" fill="#ffffff" font-family="Segoe UI, Malgun Gothic, sans-serif" font-size="24" font-weight="600">작업 범위 결정</text>
+<text x="50" y="179" fill="#d1e4df" font-family="Segoe UI, Malgun Gothic, sans-serif" font-size="17" font-weight="400">목표와 허용 경로</text>
+<path d="M290 135h22m-7 -7 7 7 -7 7" fill="none" stroke="#9ae2c5" stroke-width="2"/>
+<rect x="324" y="70" width="252" height="132" rx="12" fill="#1c393e" stroke="#426368"/>
+<text x="342" y="101" fill="#9ae2c5" font-family="Consolas, monospace" font-size="17" font-weight="600">WORKER</text>
+<text x="342" y="143" fill="#ffffff" font-family="Segoe UI, Malgun Gothic, sans-serif" font-size="24" font-weight="600">계약 실행</text>
+<text x="342" y="179" fill="#d1e4df" font-family="Segoe UI, Malgun Gothic, sans-serif" font-size="17" font-weight="400">codex / claude / agy</text>
+<path d="M582 135h22m-7 -7 7 7 -7 7" fill="none" stroke="#9ae2c5" stroke-width="2"/>
+<rect x="616" y="70" width="252" height="132" rx="12" fill="#1c393e" stroke="#426368"/>
+<text x="634" y="101" fill="#9ae2c5" font-family="Consolas, monospace" font-size="17" font-weight="600">MAIN</text>
+<text x="634" y="143" fill="#ffffff" font-family="Segoe UI, Malgun Gothic, sans-serif" font-size="24" font-weight="600">결과 검증</text>
+<text x="634" y="179" fill="#d1e4df" font-family="Segoe UI, Malgun Gothic, sans-serif" font-size="17" font-weight="400">근거 확인 후 수락·반려</text>
+<path d="M32 226h836" stroke="#426368"/>
+<text x="35" y="259" fill="#9ae2c5" font-family="Consolas, monospace" font-size="20" font-weight="600">.agent-runs/</text>
+<text x="35" y="289" fill="#d1e4df" font-family="Segoe UI, Malgun Gothic, sans-serif" font-size="17" font-weight="400">실행 근거와 판정</text>
+<text x="475" y="259" fill="#9ae2c5" font-family="Consolas, monospace" font-size="20" font-weight="600">crew handoff</text>
+<text x="475" y="289" fill="#d1e4df" font-family="Segoe UI, Malgun Gothic, sans-serif" font-size="17" font-weight="400">다음 세션에 남길 인수인계 초안</text>
+</svg>

@@ -1,6 +1,6 @@
 ---
 name: cli-crew
-description: Coordinate multi-step coding, investigation, and review work across codex, agy, and claude with crew. Use when a goal benefits from independent investigation, bounded implementation, or a second review, even when the user names no worker. Main chooses the workers and sequence, verifies results, and finishes the requested task.
+description: Coordinate multi-step coding, investigation, and review work across codex, agy, and claude with crew. Set up missing project instructions on first use. Use for project onboarding or when a goal benefits from independent investigation, bounded implementation, or a second review, even when the user names no worker. Main chooses the workers and sequence, verifies results, and finishes the requested task.
 ---
 
 # cli-crew
@@ -11,6 +11,12 @@ workers in safe modes, timeouts, state files, classification, boundary and subag
 and asking the user for approval. Talk to the user in their language.
 
 If the environment variable `AGENT_ROLE=WORKER` is set, you are a worker: do NOT use this skill or delegate.
+
+## First use in a project
+Before choosing workers or doing a small task yourself, identify the intended project root and read applicable project, ancestor, and target-specific instructions. Respect any restrictions before setup. For a read-only request, inspect existing guidance without creating files.
+For project setup or other work that permits project edits, run `crew init` from the intended root. If it reports existing instructions, use them as written. If it creates `AGENTS.md`, main completes that new file in the project’s documentation language, using the README, build manifests, CI workflows and test layout as evidence. Record the project's purpose, meaningful paths, and exact development or verification commands with their source and working directory when known. Do not infer commands, invent team policies, or copy private paths or credentials. In an empty project, keep the instructions minimal.
+When adapting a new guide, distinguish the shared working procedure from project-specific facts. Identify the authoritative requirements, how a new session finds the latest relevant handoff, which ongoing edits it must preserve, and how verification is recorded. If a user names prior projects as examples, consult only the authorized instructions. Carry over applicable practices; keep personal paths, client data, tool-specific roles, and custom locking or folder layouts out of unrelated projects. Use an existing language or record convention only when there is evidence for it.
+If setup was the whole request, review the file and stop. Otherwise continue the original task.
 
 ## 0. Choose the workflow from the goal
 The user supplies the outcome. Main owns task decomposition, worker selection, sequencing, and final verification. Honor explicit preferences. Do not ask the user to assign routine stages.
