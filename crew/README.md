@@ -33,8 +33,25 @@ Safety flags for `crew run` (ask the user first): `--approve-data-sharing` (inst
 data), `--approve-cost` (high effort / approval models).
 Credential-like environment variables are removed from the worker environment (except the worker's own provider key).
 
-Other commands: `crew status`, `crew check <id> --recheck`, `crew cancel <id> [--yes]`,
-`crew clean [--sessions] [--runs] [--older-than N] [--yes]`.
+## Command reference
+
+Run commands from the target project. Replace uppercase placeholders with your values. Use `crew --help`, `crew contract --help`, or `crew run --help` to inspect each level. `crew --version` prints the installed version.
+
+| Usage | Purpose |
+| --- | --- |
+| `crew init` | Create missing project instructions; reuse existing guides. |
+| `crew detect [--paths PATH ...] [--json]` | List available workers, applicable instructions and active runs. |
+| `crew contract new ID [--agent CLI] [--mode MODE] [--write PATH ...]` | Create the contract template. Fill in the objective, context and completion criteria before running. |
+| `crew contract check FILE [--agent CLI] [--effort LEVEL] [--model MODEL] [--json]` | Validate a contract without starting a worker. |
+| `crew run --contract FILE [--agent CLI] [--effort LEVEL] [--model MODEL] [--timeout MIN] [--with-result] [--json] [--approve-cost] [--approve-data-sharing]` | Start the worker and wait for its result. Timeout is in minutes. The legacy --allow-unbounded-write flag cannot enable agy writes. |
+| `crew status [--all] [--json]` | Show current and recent task states; use --all for older tasks. |
+| `crew result ID [--raw]` | Read the saved worker result; --raw shows the full response. |
+| `crew check ID [--recheck] [--json]` | Inspect the run checks. Recheck uses saved evidence. |
+| `crew accept ID [--verified TEXT] [--override --reason TEXT]` | Record acceptance. Supply actual verification for a partial or unverified result. |
+| `crew reject ID --reason TEXT` | Reject the result and record why. |
+| `crew cancel ID [--yes]` | Preview cancellation; --yes performs it. |
+| `crew handoff --agent NAME --task SLUG --status STATUS [--since ISO_OR_LAST] [--tasks ID,ID] [--lang LANG]` | Draft a handoff for the next session. Use en or ko; status is Done, "In progress", or Blocked. |
+| `crew clean [--sessions] [--runs] [--older-than DAYS] [--yes] [--json]` | Preview cleanup of eligible records. The age threshold defaults to 7 days; --yes applies the plan. |
 
 Optional config `~/.crew/config.toml`:
 ```toml
