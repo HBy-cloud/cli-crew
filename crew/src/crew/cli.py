@@ -296,7 +296,8 @@ def cmd_contract_check(a) -> int:
     tid = r.settings.get("task_id")
     if tid and tid in runs.registry():
         r.warnings.append(f"task_id '{tid}' is already used; crew run will refuse it")
-    scan = scan_instructions(instruction_dirs(root, Path.cwd(), r.settings.get("write_paths") or []))
+    scan = scan_instructions(instruction_dirs(root, Path.cwd(), r.settings.get("write_paths") or [],
+                                              r.add_dirs_abs if r.settings.get("mode") == "read" else []))
     hits = scan["restrictions"]
     if scan["privacy"]:
         r.warnings.append("sensitive-data hints in instructions; crew run needs --approve-data-sharing after asking the user")

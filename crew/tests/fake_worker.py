@@ -49,6 +49,10 @@ elif scenario == "write_handoff":
     Path(m.group(1)).write_text("# handoff\n", encoding="utf-8")
 elif scenario == "review_pass":
     text = "## REVIEW\nVERDICT: PASS\nCRITERIA:\n- tests pass: met (ran unittest)\n- docs updated: unverified\nFINDINGS: none\n\n" + RESULT_OK
+elif scenario == "write_env_path":
+    target = Path(os.environ["FAKE_WRITE_PATH"])
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("changed by worker\n", encoding="utf-8")
 elif scenario == "write_inside":
     Path("src").mkdir(exist_ok=True)
     Path("src/a.txt").write_text("hello", encoding="utf-8")

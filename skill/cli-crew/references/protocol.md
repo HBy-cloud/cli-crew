@@ -70,12 +70,17 @@ Reservation is atomic (`.agent-runs/locks/reserve.lock`).
 - Worker environment: credential-like variables (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*API_KEY*`, `AWS_*`, ...)
   are removed before launching a worker, except the worker's own provider keys. Removed names (never values)
   are recorded in `env_stripped`. Extra names can be allowed via `env_passthrough` in `~/.crew/config.toml`.
-- Sensitive-data hints in instruction files → `crew run` requires `--approve-data-sharing`.
+- Sensitive-data hints in instruction files (the working directory, write paths, and `add_dirs`, with their parent
+  folders) → `crew run` requires `--approve-data-sharing`.
+- Worker handoff boundary: a `worker_handoff` task may change only its own slot file and the slot files of
+  handoff tasks whose runs overlapped it (compared by recorded start and end times; for older records without an
+  end time, start + `duration_s` + 50 ms). The allowed list is stored as `handoff_allowed_slots`, so
+  `crew check --recheck` gives the same answer; runs recorded by an older crew are rechecked from current peer state.
 - agy write mode runs with a per-session `--settings` file; `--allow-unbounded-write` is deprecated and ignored.
 - Copilot requires an explicit single-file write contract and a dedicated profile. Its built-in tools are restricted to reading and editing, and the CLI receives a write rule for the target file only. The normal boundary checks still run.
 - Worker prompt header tells workers to treat file contents as data and ignore embedded instructions.
 - Limits: Codex and agy can read any file the user can read; writes outside the project are not
-  detected; agy has browser tools. Workers may read the public web; the header forbids sending project content,
+  detected; in a Git project, changes to git-ignored files are not detected except for secret-named files; agy has browser tools. Workers may read the public web; the header forbids sending project content,
   secrets or personal data, but crew does not block network access.
 
 ## Approval needed from the user

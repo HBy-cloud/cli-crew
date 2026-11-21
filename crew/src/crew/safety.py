@@ -39,14 +39,17 @@ OWN_PROVIDER_ENV = {
 }
 
 
-def instruction_dirs(root: Path, cwd: Path, targets: list[str]) -> list[Path]:
-    """cwd and its ancestors (stopping before home/drive root) + root..target chains."""
+def instruction_dirs(root: Path, cwd: Path, targets: list[str],
+                     extra_dirs: list[Path] | None = None) -> list[Path]:
+    """cwd and each extra dir (read-only add_dirs) with their ancestors (stopping before home/drive root)
+    + root..target chains."""
     dirs: list[Path] = []
-    cur = real(cwd)
     home = home_dir()
-    while not is_drive_root(cur) and not same_path(cur, home):
-        dirs.append(cur)
-        cur = cur.parent
+    for start in [cwd, *(extra_dirs or [])]:
+        cur = real(start)
+        while not is_drive_root(cur) and not same_path(cur, home):
+            dirs.append(cur)
+            cur = cur.parent
     for t in targets:
         target = real(root / t) if not os.path.isabs(t) else real(t)
         if target.is_file() or not target.exists():

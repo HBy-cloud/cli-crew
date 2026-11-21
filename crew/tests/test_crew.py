@@ -986,5 +986,123 @@ class MiscTests(Base):
             find_project_root(tempfile.gettempdir())
 
 
+# ------------------------------------------------------------ enforcement gaps (2026-11-22 cross-model review)
+
+class EnforcementGapTests(Base):
+    def handoff_contract(self, tid):
+        p = self.contract(tid=tid)
+        p.write_text(p.read_text(encoding="utf-8").replace("ephemeral: false", "ephemeral: false\nworker_handoff: true"),
+                     encoding="utf-8")
+        return p
+
+    def peer_state(self, tid, slot, **fields):
+        self.runs.ensure()
+        state = {"task_id": tid, "status": "DONE", "handoff_slot": slot, "worker_handoff": True, **fields}
+        self.runs.state_path(tid).write_text(json.dumps(state), encoding="utf-8")
+
+    def test_historical_handoff_slot_is_not_exempt(self):
+        import time
+        old = "handoffs/2026-01-01/0000-codex-old.md"
+        (self.root / old).parent.mkdir(parents=True)
+        (self.root / old).write_text("# old handoff\n", encoding="utf-8")
+        self.peer_state("T-old", old, started_epoch=time.time() - 86400, duration_s=60.0)
+        os.environ["FAKE_SCENARIO"] = "write_env_path"
+        os.environ["FAKE_WRITE_PATH"] = old
+        code, _, _ = crew("run", "--contract", str(self.handoff_contract("T-h")))
+        s = self.runs.load_state("T-h")
+        self.assertEqual(code, 11, s)
+        self.assertEqual([v["path"] for v in s["boundary_violations"]], [old])
+
+    def test_overlapping_peer_handoff_slot_is_exempt(self):
+        import time
+        peer = "handoffs/2026-01-01/0000-agy-peer.md"
+        self.peer_state("T-peer", peer, status="RUNNING", started_epoch=time.time(), duration_s=None)
+        os.environ["FAKE_SCENARIO"] = "write_env_path"
+        os.environ["FAKE_WRITE_PATH"] = peer
+        code, _, _ = crew("run", "--contract", str(self.handoff_contract("T-h")))
+        s = self.runs.load_state("T-h")
+        self.assertEqual(code, 0, s)
+        self.assertEqual(s["boundary_violations"], [])
+        self.assertEqual([c["path"] for c in s["changes"]], [peer])
+
+    def test_finished_overlapping_peer_slot_is_exempt(self):
+        import time
+        peer = "handoffs/2026-01-01/0000-agy-peer.md"
+        # finished peer whose recorded run spans this run (fixed end, independent of machine speed)
+        self.peer_state("T-peer", peer, status="DONE", started_epoch=time.time() - 1, ended_epoch=time.time() + 600,
+                        duration_s=601.0)
+        os.environ["FAKE_SCENARIO"] = "write_env_path"
+        os.environ["FAKE_WRITE_PATH"] = peer
+        code, _, _ = crew("run", "--contract", str(self.handoff_contract("T-h")))
+        s = self.runs.load_state("T-h")
+        self.assertEqual(code, 0, s)
+        self.assertIn(peer, s["handoff_allowed_slots"])
+
+    def test_peer_that_ended_just_before_start_is_not_exempt(self):
+        import time
+        from crew import runner
+        s = {"task_id": "T-h", "handoff_slot": "handoffs/own.md", "started_epoch": 1000.0, "ended_epoch": 1010.0}
+        self.peer_state("T-peer", "handoffs/peer.md", started_epoch=990.0, ended_epoch=999.92, duration_s=9.9)
+        self.assertEqual(runner.overlapping_handoff_slots(self.runs, s), ["handoffs/own.md"])
+        self.peer_state("T-peer", "handoffs/peer.md", started_epoch=990.0, ended_epoch=1000.0, duration_s=10.0)
+        self.assertEqual(runner.overlapping_handoff_slots(self.runs, s), ["handoffs/own.md", "handoffs/peer.md"])
+
+    def test_legacy_recheck_uses_recorded_duration(self):
+        from crew import runner
+        s = {"task_id": "T-h", "handoff_slot": "handoffs/own.md", "started_epoch": 100.0, "duration_s": 10.0}
+        self.peer_state("T-peer", "handoffs/peer.md", started_epoch=200.0, ended_epoch=201.0)
+        self.assertEqual(runner.overlapping_handoff_slots(self.runs, s), ["handoffs/own.md"])
+
+    def test_recheck_keeps_handoff_decision_after_peer_state_changes(self):
+        import time
+        peer = "handoffs/2026-01-01/0000-agy-peer.md"
+        self.peer_state("T-peer", peer, status="RUNNING", started_epoch=time.time(), duration_s=None)
+        os.environ["FAKE_SCENARIO"] = "write_env_path"
+        os.environ["FAKE_WRITE_PATH"] = peer
+        self.assertEqual(crew("run", "--contract", str(self.handoff_contract("T-h")))[0], 0)
+        self.peer_state("T-peer", peer, status="STALE", started_epoch=time.time() - 3600, duration_s=None)
+        code, out, _ = crew("check", "T-h", "--recheck", "--json")
+        self.assertEqual(json.loads(out)["boundary_violations"], [])
+
+    def test_slot_exemption_is_exact_file(self):
+        os.environ["FAKE_SCENARIO"] = "write_env_path"
+        p = self.handoff_contract("T-h")
+        from crew import runner
+        slot = runner.handoff_slot(self.root, "codex", "T-h")
+        os.environ["FAKE_WRITE_PATH"] = slot + "/nested.md"
+        code, _, _ = crew("run", "--contract", str(p))
+        s = self.runs.load_state("T-h")
+        self.assertEqual(code, 11, s)
+        self.assertEqual([v["path"] for v in s["boundary_violations"]], [slot + "/nested.md"])
+
+    def test_privacy_hint_in_add_dir_parent_and_write_contract(self):
+        parent = WORK / f"outside-{uuid.uuid4().hex[:8]}"
+        child = parent / "data"
+        child.mkdir(parents=True)
+        self.addCleanup(rmtree_force, parent)
+        (parent / "AGENTS.md").write_text("Customer data lives here; mask it.\n", encoding="utf-8")
+        os.environ["FAKE_SCENARIO"] = "done"
+        p = self.contract(ad=json.dumps([child.resolve().as_posix()]))
+        self.assertEqual(crew("run", "--contract", str(p))[0], 3)
+        w = self.contract(tid="T-w", mode="write", wp="[src]", ad=json.dumps([child.resolve().as_posix()]))
+        code, out, _ = crew("contract", "check", str(w))
+        self.assertNotEqual(code, 0)
+        self.assertNotIn("approve-data-sharing", out)
+
+    def test_privacy_hint_in_add_dir_gates_run_and_check(self):
+        outside = WORK / f"outside-{uuid.uuid4().hex[:8]}"
+        outside.mkdir(parents=True)
+        self.addCleanup(rmtree_force, outside)
+        (outside / "AGENTS.md").write_text("Customer data lives here; mask it.\n", encoding="utf-8")
+        os.environ["FAKE_SCENARIO"] = "done"
+        p = self.contract(ad=json.dumps([outside.resolve().as_posix()]))
+        code, out, _ = crew("contract", "check", str(p))
+        self.assertIn("approve-data-sharing", out)
+        code, _, err = crew("run", "--contract", str(p))
+        self.assertEqual(code, 3)
+        self.assertIn("approve-data-sharing", err)
+        self.assertEqual(crew("run", "--contract", str(p), "--approve-data-sharing")[0], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

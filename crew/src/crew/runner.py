@@ -131,20 +131,47 @@ def handoff_slot(root: Path, agent: str, task_id: str) -> str:
 
 
 def handoff_violations(runs: st.Runs, changes: list[dict[str, Any]], s: dict[str, Any], root: Path) -> list[dict[str, Any]]:
-    """Boundary check for worker_handoff tasks: only the own slot and the slots of other handoff tasks may change."""
-    from crew.common import is_within
+    """Boundary check for worker_handoff tasks: only the own slot file and the slot files of handoff tasks whose
+    run overlapped this run may change (a parallel read task writes its own slot meanwhile). The allowed list is
+    fixed when the run finishes (`handoff_allowed_slots`) so a later recheck does not depend on peer state."""
+    from crew.common import same_path
 
+    slots = s.get("handoff_allowed_slots")
+    if slots is None:
+        slots = overlapping_handoff_slots(runs, s)
+    allowed = [root / x for x in slots if x]
+    return [c for c in changes if not any(same_path(root / c["path"], a) for a in allowed)]
+
+
+def overlapping_handoff_slots(runs: st.Runs, s: dict[str, Any]) -> list[str]:
+    """The own handoff slot plus the slots of other handoff runs whose run time overlapped this one."""
     slots = [s.get("handoff_slot")]
+    start = s.get("started_epoch")
+    end = s.get("ended_epoch")
+    if end is None:  # still running, or an older record: use duration_s (rounded to 0.1 s) when known
+        end = start + s["duration_s"] + 0.05 if start is not None and s.get("duration_s") is not None else time.time()
     try:
         for other in runs.registry():
+            if other == s.get("task_id"):
+                continue
             try:
-                slots.append(read_json(runs.state_path(other)).get("handoff_slot"))
+                o = read_json(runs.state_path(other))
             except (OSError, ValueError):
                 continue
+            o_start = o.get("started_epoch")
+            if not o.get("handoff_slot") or start is None or o_start is None:
+                continue
+            if o.get("ended_epoch") is not None:
+                o_end = o["ended_epoch"]
+            elif o.get("duration_s") is not None:  # older record: duration_s is rounded to 0.1 s
+                o_end = o_start + o["duration_s"] + 0.05
+            else:
+                o_end = time.time() if o.get("status") == "RUNNING" else o_start
+            if o_start <= end and o_end >= start:
+                slots.append(o["handoff_slot"])
     except Exception:  # noqa: BLE001 - registry problems must not hide the own slot check
         pass
-    allowed = [root / x for x in slots if x]
-    return [c for c in changes if not any(is_within(root / c["path"], a) for a in allowed)]
+    return [x for x in slots if x]
 
 
 def default_model(agent: str) -> str | None:
@@ -300,6 +327,7 @@ def finalize(runs: st.Runs, state: dict[str, Any], *, root: Path, write_paths_ab
             _add_file(state, f"{tid}.snap.after.json")
             changes = snapshot.diff(before, after, root)
             if state.get("worker_handoff"):
+                state["handoff_allowed_slots"] = overlapping_handoff_slots(runs, state)
                 viol = handoff_violations(runs, changes, state, root)
                 state["handoff_written"] = (root / state["handoff_slot"]).is_file()
             else:
@@ -357,6 +385,7 @@ def finalize(runs: st.Runs, state: dict[str, Any], *, root: Path, write_paths_ab
     if state["status"] == "DONE" and state.get("boundary_check"):
         state["status"] = "DONE_UNVERIFIED"
     state["ended"] = now_iso()
+    state["ended_epoch"] = time.time()
     try:
         state["duration_s"] = round(time.time() - state["started_epoch"], 1)
     except (KeyError, TypeError):
@@ -391,7 +420,8 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
         (root / slot).parent.mkdir(parents=True, exist_ok=True)
         s["handoff_slot"] = slot
         s["cli_mode"] = "write"
-    scan = safety.scan_instructions(safety.instruction_dirs(root, Path.cwd(), s.get("write_paths") or []))
+    scan = safety.scan_instructions(safety.instruction_dirs(root, Path.cwd(), s.get("write_paths") or [],
+                                                            chk.add_dirs_abs))
     if scan["privacy"] and not approve_data_sharing:
         raise CrewError(EXIT_GUARD, "project instructions mention personal/sensitive data; delegation sends content to "
                                     f"the {s['agent']} provider. Ask the user, then pass --approve-data-sharing. "

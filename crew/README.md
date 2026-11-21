@@ -28,7 +28,7 @@ crew accept T-01            # or: crew reject T-01 --reason "..."
 crew handoff --agent claude --task my-task --status Done
 ```
 
-agy write tasks run with a per-session `--settings` file that confines writes to the project; new files inside it are reported by the boundary check.
+agy write tasks run with a per-session `--settings` file that confines writes to the project; new files inside it are reported by the boundary check (in a Git project, git-ignored files are not checked except secret-named ones).
 
 For a small edit, explicitly select `--agent copilot --mode write --write <file>`. The file must already exist and the contract must use `effort: low`. [Dedicated Copilot profile setup](../skill/cli-crew/references/adapters.md#github-copilot-cli-setup)
 
