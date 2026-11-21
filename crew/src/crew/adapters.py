@@ -19,7 +19,7 @@ AGY_MAX_CMDLINE_UTF16 = 30000
 
 # CLI versions these adapters were verified against (skill/cli-crew/references/adapters.md, SPEC 6).
 # Update together with that reference after re-verifying flags and output formats.
-VERIFIED_VERSIONS = {"codex": "0.171.0", "agy": "1.5.13", "claude": "2.1.329"}
+VERIFIED_VERSIONS = {"codex": "0.171.0", "agy": "1.5.14", "claude": "2.1.330"}
 
 
 def version_number(text: str | None) -> str | None:

@@ -1,7 +1,7 @@
 # Worker CLI adapters (reference)
 
 `crew` assembles these commands; you normally do not run them yourself. Verified on Windows 11 with
-codex-cli 0.171.0, agy 1.5.13, Claude Code 2.1.329 (2026-11-20). Re-verify after CLI upgrades.
+codex-cli 0.171.0, agy 1.5.14, Claude Code 2.1.330 (2026-11-20). Re-verify after CLI upgrades.
 These versions are recorded in `VERIFIED_VERSIONS` (crew/src/crew/adapters.py). `crew detect` and run summaries
 print a VERSION WARNING when an installed CLI differs. Update both places together after re-verifying.
 

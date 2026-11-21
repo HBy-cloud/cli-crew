@@ -121,7 +121,7 @@ Example: a worker can report success even when the final file-boundary check fai
 | Claude Code (`claude`) | Yes | Paths named in the contract | Project and listed directories only |
 | Antigravity (`agy`) | Yes | Refused before launch | Any file the user can read |
 
-Adapters were verified with codex-cli 0.171.0, agy 1.5.13, and Claude Code 2.1.329. Re-check after upgrading a CLI. See [worker adapters](skill/cli-crew/references/adapters.md) for invocation details and known quirks.
+Adapters were verified with codex-cli 0.171.0, agy 1.5.14, and Claude Code 2.1.330. Re-check after upgrading a CLI. See [worker adapters](skill/cli-crew/references/adapters.md) for invocation details and known quirks.
 
 ## Safety model and limitations
 

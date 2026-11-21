@@ -121,7 +121,7 @@ crew check T-01 --recheck
 | Claude Code (`claude`) | 지원 | 계약에 지정한 경로 | 프로젝트와 지정한 디렉터리만 |
 | Antigravity (`agy`) | 지원 | 실행 전 차단 | 사용자가 읽을 수 있는 모든 파일 |
 
-어댑터는 codex-cli 0.171.0, agy 1.5.13, Claude Code 2.1.329에서 검증했습니다. CLI를 업그레이드하면 다시 확인하세요. 호출 방식과 알려진 특이사항은 [워커 어댑터](skill/cli-crew/references/adapters.md)에 있습니다.
+어댑터는 codex-cli 0.171.0, agy 1.5.14, Claude Code 2.1.330에서 검증했습니다. CLI를 업그레이드하면 다시 확인하세요. 호출 방식과 알려진 특이사항은 [워커 어댑터](skill/cli-crew/references/adapters.md)에 있습니다.
 
 ## 안전 모델과 한계
 
