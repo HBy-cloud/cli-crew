@@ -63,7 +63,19 @@ Open your **target project** in a new AI CLI session and describe the outcome yo
 
 The main agent may fix a small bug directly. If an independent check helps, it can give a read-only worker one focused question, such as how the exporter handles a missing final newline, while it owns the fix and the regression test itself. The worker gets a contract with the question, the relevant paths, and the completion criteria. It does not get the whole conversation.
 
-To invoke the skill explicitly, use `/cli-crew` in Claude Code or `$cli-crew` in Codex, or mention `cli-crew` in your prompt. Run `crew detect` in the project to see which workers are available.
+### Using the skill
+
+**Invoke it by name when you want cli-crew.** The skill loads on its own only when a request matches its description, for example "get an independent review from another model". In our tests a plain goal such as "fix this bug and add a test" never loaded it (0 of 6), while requests that asked for another model's review did (4 of 4).
+
+| Main CLI | How to invoke | Status |
+| --- | --- | --- |
+| Claude Code | `/cli-crew <your goal>` | Verified in interactive and headless sessions |
+| Codex | `$cli-crew <your goal>` | Skill loading verified; Codex as main is less tested |
+| Antigravity (`agy`) | Mention `cli-crew` in your request | Skill loading verified; agy as main is less tested |
+
+Example: `/cli-crew Fix the CSV export bug, then have another model review the change.`
+
+Even when invoked, the main agent still decides what to delegate. Small tasks are usually done directly. Run `crew detect` in the project to see which workers are available. After updating cli-crew, start a new CLI session: a session that is already open keeps the skill text it loaded at the start.
 
 **Project instructions.** When you ask for project setup, or invoke the skill by name with a request that permits edits, the main agent runs `crew init`. Existing root-level `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md` files are used as they are. Otherwise a starter `AGENTS.md` is created and the main agent fills in the purpose, conventions, and test commands it can verify from the repository. If the main agent loads the skill on its own during other work, or the request is read-only, no instruction file is created. Instead, the final report notes once that the guide is missing and offers to set it up.
 
