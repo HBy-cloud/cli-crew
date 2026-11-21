@@ -12,6 +12,8 @@ print a VERSION WARNING when an installed CLI differs. Update both places togeth
 | claude | `claude -p --restricted --permission-mode plan --permission-prompts none --output-format json --no-session-persistence --effort <E> [--add-dir D]` | `--permission-mode acceptEdits` | stdin | JSON (`result`, `is_error`, `permission_denials`, `subagent_stats`, `total_cost_usd`) |
 
 ## Known behaviour
+- Web (verified 2026-11-21, one run each): codex is BLOCKED because crew's worker header forbids network requests; agy ran `search_web` and claude ran `WebSearch`,
+  both with summaries only and no page fetch, so postings and deadlines stayed unverified. Do not hand them web collection that needs page contents.
 - Safe-mode workers cannot run shell commands (codex sandbox `CreateProcessAsUserW` denied; agy print mode
   auto-denies commands; claude `--restricted` has no shell). Main runs tests/builds.
 - Exit code 0 does not mean success. agy prints `jetski: no output produced ... auto-denied` with exit 0.

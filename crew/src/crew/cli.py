@@ -316,6 +316,16 @@ def cmd_contract_check(a) -> int:
 
 # ------------------------------------------------------------ run / cancel
 
+def _has_active_cplan(runs: Any) -> bool:
+    try:
+        for p in runs.plan_files():
+            if pl.load(p).fields.get("status") == "active":
+                return True
+    except Exception:  # noqa: BLE001 - a broken plan must not break the run summary
+        return True
+    return False
+
+
 def summarize(state: dict[str, Any], runs: Any = None) -> list[str]:
     lines = [f"task {state['task_id']}: {state.get('status')} (agent={state.get('agent')}, mode={state.get('mode')}, "
              f"attempts={len(state.get('attempts', []))}, {state.get('duration_s')}s)"]
@@ -325,6 +335,8 @@ def summarize(state: dict[str, Any], runs: Any = None) -> list[str]:
     if warning:
         lines.append(f"VERSION WARNING: {warning}")
     lines.append(f"worker_status: {state.get('worker_status')}")
+    if not state.get("plan") and runs is not None and not _has_active_cplan(runs):
+        lines.append("NOTE: no active cplan; write one with `crew plan new` before delegating (SKILL: cplan first)")
     v = state.get("boundary_violations") or []
     lines.append(f"boundary violations: {len(v)}" + (": " + ", ".join(f"{x['kind']} {x['path']}" for x in v[:10]) if v else ""))
     if state.get("worker_handoff"):

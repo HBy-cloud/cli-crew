@@ -208,6 +208,14 @@ class ContractTests(Base):
     def test_valid_read(self):
         self.assertEqual(self.check(self.contract())[0], 0)
 
+    def test_duplicate_frontmatter_key_is_rejected(self):
+        p = self.contract(tid="T-dup")
+        p.write_text(p.read_text(encoding="utf-8").replace("ephemeral: false", "ephemeral: false\nephemeral: true"),
+                     encoding="utf-8")
+        code, out, err = crew("contract", "check", str(p))
+        self.assertEqual(code, 2)
+        self.assertIn("duplicate frontmatter key: ephemeral", out + err)
+
     def test_write_requires_paths(self):
         code, out = self.check(self.contract(mode="write"))
         self.assertEqual(code, 2)

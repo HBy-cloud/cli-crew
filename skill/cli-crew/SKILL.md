@@ -87,6 +87,7 @@ For each delegated task, choose the CLI, model and reasoning effort together. Us
 - agy: crew confines it to the project with `--settings` (no outside writes, no overwrite of unlisted files) but cannot stop new files inside the project; check the boundary report.
 - No worker is prevented from *reading* secret files except claude `--restricted` (limited to the project and
   `add_dirs`). For sensitive projects prefer claude.
+- Web: workers cannot open pages. agy and claude can only search (result summaries); codex is blocked by crew's no-network rule. Collect web data yourself or with subagents; give workers material to analyze or review (generalized, no personal data, only with the user's OK).
 - A different model than the author is best for independent review.
 
 ## 3. Contract

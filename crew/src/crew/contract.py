@@ -139,6 +139,7 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     except StopIteration:
         raise ContractError("frontmatter is not closed with '---'")
     data: dict[str, Any] = {}
+    seen: set[str] = set()
     key: str | None = None
     for raw in lines[1:end]:
         if not raw.strip() or raw.lstrip().startswith("#"):
@@ -153,6 +154,9 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
             raise ContractError(f"cannot parse frontmatter line: {raw!r}")
         k, v = raw.split(":", 1)
         key = k.strip()
+        if key in seen:
+            raise ContractError(f"duplicate frontmatter key: {key}")
+        seen.add(key)
         v = _strip_comment(v)
         if v.startswith("[") and v.endswith("]"):
             data[key] = _inline_list(v)

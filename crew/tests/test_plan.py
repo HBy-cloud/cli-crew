@@ -100,6 +100,17 @@ class PlanTests(PlanHelpers, Base):
         code, out, _ = crew("plan", "check", "P1", "--json")
         self.assertNotIn("Revisions", " ".join(json.loads(out)["warnings"]))
 
+    def test_run_note_when_no_active_cplan(self):
+        os.environ["FAKE_SCENARIO"] = "done"
+        code, out, _ = crew("run", "--contract", str(self.contract()))
+        self.assertEqual(code, 0)
+        self.assertIn("NOTE: no active cplan", out)
+        self.write_plan()
+        os.environ["FAKE_SCENARIO"] = "done"
+        code, out, _ = crew("run", "--contract", str(self.linked_contract(tid="T-2")))
+        self.assertEqual(code, 0)
+        self.assertNotIn("NOTE: no active cplan", out)
+
     def test_contract_links(self):
         self.write_plan()
         code, out, _ = crew("contract", "check", str(self.linked_contract()), "--json")
