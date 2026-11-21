@@ -28,7 +28,7 @@ crew accept T-01            # or: crew reject T-01 --reason "..."
 crew handoff --agent claude --task my-task --status Done
 ```
 
-agy workers support read tasks only.
+agy write tasks run with a per-session `--settings` file that confines writes to the project; new files inside it are reported by the boundary check.
 
 Safety flags for `crew run` (ask the user first): `--approve-data-sharing` (instructions mention personal/sensitive
 data), `--approve-cost` (high effort / approval models).
@@ -49,7 +49,7 @@ Run commands from the target project. Replace uppercase placeholders with your v
 | `crew routing --kind KIND --mode MODE [--json]` | Show up to ten recent completed worker runs with matching mode and kind (investigate, implement, review, document, other). |
 | `crew compare ID... [--json]` | Compare verification evidence, violations, worker time and provider-specific usage for completed runs. |
 | `crew contract check FILE [--agent CLI] [--effort LEVEL] [--model MODEL] [--json]` | Validate a contract without starting a worker. |
-| `crew run --contract FILE [--agent CLI] [--effort LEVEL] [--model MODEL] [--timeout MIN] [--with-result] [--json] [--approve-cost] [--approve-data-sharing]` | Start the worker and wait for its result. Timeout is in minutes. The legacy --allow-unbounded-write flag cannot enable agy writes. |
+| `crew run --contract FILE [--agent CLI] [--effort LEVEL] [--model MODEL] [--timeout MIN] [--with-result] [--json] [--approve-cost] [--approve-data-sharing]` | Start the worker and wait for its result. Timeout is in minutes. The legacy --allow-unbounded-write flag is deprecated and ignored. |
 | `crew status [--all] [--json]` | Show current and recent task states; use --all for older tasks. |
 | `crew result ID [--raw]` | Read the saved worker result; --raw shows the full response. |
 | `crew check ID [--recheck] [--json]` | Inspect the run checks. Recheck uses saved evidence. |

@@ -19,7 +19,8 @@ cli-crew lets the AI CLI you are already using (the *main* agent) hand bounded w
 ## Features
 
 - **Goal-driven delegation.** You state the outcome. The main agent decides what to do itself, what to give its own subagents, what to hand to a worker, and when an independent review from a different model is worth the extra call.
-- **Plans for multi-step goals.** The main agent writes a plan in which each step names its executor (itself, its own built-in subagents, or a crew worker), its dependencies, and how it will be verified. Runs are linked to steps, so progress survives a handoff.
+- **Plans for multi-step goals.** Before starting, the main agent writes a plan (a *cplan*) in which each step names its executor (itself, its own built-in subagents, or a crew worker), its dependencies, and how it will be verified. When evidence changes the plan, the change and its reason are recorded. Runs are linked to steps, so progress survives a handoff.
+- **Independent review.** Each deliverable gets a reviewer step on a different model than its author. The reviewer returns a PASS, FAIL or PARTIAL verdict with evidence per completion criterion, and `crew` records it.
 - **Explicit task contracts.** Each delegated task is a Markdown contract with an objective, file paths for context, completion criteria, and, for edits, the exact paths the worker may change.
 - **Verification before acceptance.** Every run is classified (`DONE`, `DONE_UNVERIFIED`, `PARTIAL`, `FAILED`, ...), checked for out-of-scope file changes and subagent use, and must be accepted or rejected by the main agent with a recorded reason.
 - **Guardrails by default.** Read-only mode is the default, writes run one at a time, bypass flags are refused, credential-like environment variables are stripped from worker processes, and higher-cost or data-sharing runs require your approval.
@@ -119,7 +120,7 @@ Example: a worker can report success even when the final file-boundary check fai
 | --- | --- | --- | --- |
 | Codex (`codex`) | Yes | Paths named in the contract | Any file the user can read |
 | Claude Code (`claude`) | Yes | Paths named in the contract | Project and listed directories only |
-| Antigravity (`agy`) | Yes | Refused before launch | Any file the user can read |
+| Antigravity (`agy`) | Yes | Paths named in the contract (confined to the project; new files are reported by the boundary check) | Any file the user can read |
 
 Adapters were verified with codex-cli 0.171.0, agy 1.5.14, and Claude Code 2.1.330. Re-check after upgrading a CLI. See [worker adapters](skill/cli-crew/references/adapters.md) for invocation details and known quirks.
 
@@ -127,7 +128,8 @@ Adapters were verified with codex-cli 0.171.0, agy 1.5.14, and Claude Code 2.1.3
 
 - **Concurrency.** Up to three independent read tasks can run at once. A write task always runs alone.
 - **No shell for workers.** Workers run in safe modes without shell access. The main agent runs commands, builds, and tests.
-- **Boundary checks are detective, not isolating.** `crew` reports changes it can detect inside the project. It does not provide OS-level sandboxing, and writes outside the project are not detected. agy write tasks are refused because its write boundary cannot be enforced.
+- **Boundary checks are detective, not isolating.** `crew` reports changes it can detect inside the project. It does not provide OS-level sandboxing, and writes outside the project are not detected. agy write tasks run with a per-session settings file that blocks writes outside the project and overwrites of unlisted files; it cannot stop new files inside the project, which the boundary check reports.
+- **Web access.** Workers may search and read the public web, but their instructions forbid sending project content, secrets or personal data. `crew` does not block the network. How much each CLI can actually fetch has not been re-verified.
 - **Data leaves your machine.** Workers use their own provider accounts, so delegated content goes to OpenAI, Anthropic, or Google. If project instructions mention sensitive data, `crew run` requires explicit approval. If they restrict external agents, the main agent asks before delegating.
 - **Cost approval.** High reasoning effort, or models you list in `~/.crew/config.toml`, require approval before launch.
 - **No automatic rollback.** `crew` reports violations but does not revert changes.

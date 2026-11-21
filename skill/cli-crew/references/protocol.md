@@ -13,33 +13,33 @@ Source of truth: `docs/SPEC.md` (v1.0) in the cli-crew repository. This is a con
 | allow_subagents | true/false | true only in read mode |
 | effort | codex: low..xhigh · agy: low..max · claude: low..max | high+ needs `--approve-cost` |
 | model | id or null | null = CLI default |
-| task_kind | investigate, implement, review, document, other, or null | Optional category for project-local routing history. Untagged runs are excluded. |
+| task_kind | investigate, implement, review, document, other, or null | Optional category for project-local routing history. Untagged runs are excluded. `review` adds the reviewer rule (see Reviewer result). |
 | timeout_min | 1..120 | default 20 |
 | max_retries | 0 or 1 | retry only on transient errors, never after partial writes or usage limits |
 | retry_of | previous REJECTED task id | chain limited to two rejections |
 | ephemeral | true/false | codex only; requires allow_subagents=true |
-| worker_handoff | true/false | worker writes its own handoff file (`handoffs/<date>/<time>-<agent>-<task>.md`); codex/claude, mode=read, no add_dirs; runs in parallel with reads |
+| worker_handoff | true/false | worker writes its own handoff file (`handoffs/<date>/<time>-<agent>-<task>.md`); codex/claude/agy, mode=read, no add_dirs; runs in parallel with reads |
 | plan | plan id or null | set together with plan_step; the cplan must pass `crew plan check` (cplan is the name of this plan) |
 | plan_step | step id or null | must exist in the plan; a different executor in the plan is a warning |
 
-Body sections `## Objective` and `## Done when` are required.
+Body sections `## Objective` and `## Done when` are required (not empty or `TODO`). Duplicate frontmatter keys and secret-looking strings (API keys, tokens, private keys) fail validation (exit 2).
 
 ## Plans
-File: `.agent-runs/plans/<plan_id>.md` (`crew plan new`). Sections: Goal, Steps, Revisions (date, change, reason or evidence), Approvals, Notes. Frontmatter `plan_id` (equals file name), `status`: active | done | abandoned.
-Sections: `## Goal` (outcome and how main verifies it), `## Steps` table, `## Approvals`, `## Notes`.
+File: `.agent-runs/plans/<plan_id>.md` (`crew plan new`). Frontmatter: `plan_id` (equals file name), `status`: `active` | `done` | `abandoned`.
+Sections: `## Goal` (outcome and how main verifies it), `## Steps` table, `## Revisions` (`date | change | reason or evidence`), `## Approvals`, `## Notes`. Secret-looking strings fail `crew plan check` (exit 2) and are redacted in plan output.
 
 | column | values |
 |---|---|
 | step | `^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$`, unique |
 | status | todo, doing, blocked, done, dropped |
-| reviews | optional 7th column: ids of the steps a reviewer step checks (D-28) |
 | executor | main, main-subagent, `crew:<agent>[/<model or default>[/<effort>]]` |
 | depends_on | comma-separated step ids, or `-`; no cycles |
 | task, verify | concrete text; not empty or TODO |
+| reviews | optional 7th column: ids of the steps a reviewer step checks (D-28). `plan check` warns when the reviewer may run on the same model as the author (same CLI with the same or a default model; `main-subagent` reviewing `main` or `main-subagent`) |
 
 `crew plan show <id>` lists linked runs per step and the todo steps whose dependencies are all done or dropped.
-It notes mechanical mismatches: a crew step marked done without an accepted run, an accepted run on a todo or
-dropped step, a run by a different agent than the executor, runs on main or main-subagent steps, and runs on unknown steps.
+`show` and `check` report mechanical mismatches (a crew step marked done without an accepted run, an accepted run on a todo or
+dropped step, a run by a different agent than the executor, runs on main or main-subagent steps, runs on unknown steps) and plan warnings (deliverable without a reviewer step or Revisions skip row; skip reason only "small"/"simple" instead of cost/token budget, no other model or CLI available, or user opt-out; reviewer is `main` or same model as author; dropped step without a Revisions entry; stopped plan—`abandoned` or has a `blocked` step—with no newer handoff file: `NOTE: the plan is stopped ... run crew handoff`).
 
 ## Statuses (first match wins)
 The final AGY result event can report an error even when the process exits 0. An explicit terminal failure takes precedence over a worker's success footer. A recovered step error on a successful terminal result does not by itself fail the run.
@@ -52,7 +52,7 @@ Lifecycle: RUNNING, STALE (crew and worker gone), ORPHANED (crew gone, worker al
 Patterns are matched only on CLI diagnostics, not on the model's answer text.
 
 ## Exit codes
-11 violation · 130 cancelled · 10 not DONE · 5 duplicate id · 4 busy · 3 guard/approval · 2 usage/contract · 0 ok.
+11 violation · 130 cancelled · 10 not DONE · 5 duplicate id · 4 busy · 3 guard/approval (WORKER role, unsafe root or `.agent-runs` link escape, non-file instruction path on `init`, missing `--approve-cost` or `--approve-data-sharing`, `retry_of` chain rejected twice, existing worker handoff slot file, invalid `accept`/`reject`/`compare`/`cancel` state or unverified `--target` worker identity) · 2 usage/contract · 0 ok.
 
 ## Accept rules
 | status | accept |
@@ -63,7 +63,7 @@ Patterns are matched only on CLI diagnostics, not on the model's answer text.
 | FAILED, BLOCKED, TIMEOUT, CANCELLED, STALE, or any violation | `--override --reason` |
 
 ## Concurrency
-Write tasks run alone. Read tasks run in parallel up to `max_concurrent` (default 3).
+Write tasks run alone. Read tasks (including `worker_handoff: true`, which runs the worker in write mode confined by prompt/settings to its handoff slot) run in parallel up to `max_concurrent` (default 3).
 Reservation is atomic (`.agent-runs/locks/reserve.lock`).
 
 ## Safety controls
@@ -74,7 +74,8 @@ Reservation is atomic (`.agent-runs/locks/reserve.lock`).
 - agy write mode runs with a per-session `--settings` file; `--allow-unbounded-write` is deprecated and ignored.
 - Worker prompt header tells workers to treat file contents as data and ignore embedded instructions.
 - Limits: workers other than claude can read any file the user can read; writes outside the project are not
-  detected; agy has browser tools (network access not blocked by crew).
+  detected; agy has browser tools. Workers may read the public web; the header forbids sending project content,
+  secrets or personal data, but crew does not block network access.
 
 ## Approval needed from the user
 Delegating in a project whose instructions restrict it · sending sensitive project data to a provider

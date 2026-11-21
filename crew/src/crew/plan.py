@@ -35,7 +35,7 @@ TODO: the outcome the user asked for and how main will verify it. This cplan cov
      executor: {executors}
      depends_on: step ids separated by commas, or -
      reviews: ids of the steps this step reviews (a reviewer step), or -. Every deliverable needs a reviewer step
-              (executor: another CLI than the author), or a Revisions row that says why the review is skipped. -->
+              (executor: a different model than the author: another CLI, or the same CLI with another explicit model), or a Revisions row that says why the review is skipped. -->
 <!--
      Do not use '|' inside a cell. -->
 
@@ -93,6 +93,32 @@ def executor_agent(executor: str) -> str | None:
     if executor.startswith("crew:"):
         return executor[5:].split("/", 1)[0]
     return None
+
+
+def executor_model(executor: str) -> str | None:
+    """The model named by a crew executor; None when it is omitted or 'default' (the CLI default model)."""
+    if not executor.startswith("crew:"):
+        return None
+    parts = executor[5:].split("/")
+    model = parts[1].strip() if len(parts) > 1 else ""
+    return None if model.lower() in ("", "default") else model
+
+
+def _same_model(reviewer: str, author: str) -> str | None:
+    """Reviewer independence is judged by model (2026-11-21 user decision). Returns 'agent/model' when the reviewer
+    may run on the same model as the author: same CLI and the same model, or a model that cannot be told apart
+    (one side uses the CLI default). Different CLIs count as different models."""
+    ra, ta = executor_agent(reviewer), executor_agent(author)
+    if not ra or ra != ta:
+        return None
+    rm, tm = executor_model(reviewer), executor_model(author)
+    if rm and tm and rm.lower() != tm.lower():
+        return None
+    if rm and tm:
+        return f"{ra}/{rm}"
+    if rm or tm:
+        return f"{ra}/{rm or tm} vs {ra}/default; the default model may be the same"
+    return f"{ra}/default"
 
 
 def _cells(line: str) -> list[str]:
@@ -175,7 +201,7 @@ def _cycle(steps: list[Step]) -> list[str] | None:
 
 
 NOT_OK_SKIP = re.compile(r"(?i)small|simple|trivial|easy|작|단순|간단|사소")
-OK_SKIP = re.compile(r"(?i)cost|token|budget|credit|unavailable|no other|opt|비용|토큰|예산|불가|거절|옵트")
+OK_SKIP = re.compile(r"(?i)cost|token|budget|credit|unavailable|no other|no_other|opt|비용|토큰|예산|불가|없음|거절|옵트")
 
 
 def _review_warnings(plan: Plan) -> list[str]:
@@ -192,9 +218,11 @@ def _review_warnings(plan: Plan) -> list[str]:
             reviewed.add(target)
             if r.executor == "main":
                 out.append(f"step {r.step}: the reviewer is main itself, so the review of {target} is not independent")
-            ra, ta = executor_agent(r.executor), executor_agent(t.executor)
-            if ra and ra == ta:
-                out.append(f"step {r.step}: the reviewer uses the same CLI ({ra}) as the author of {target}")
+            elif r.executor == "main-subagent" and t.executor in ("main", "main-subagent"):
+                out.append(f"step {r.step}: the reviewer (main-subagent) runs on the same model as the author of {target}")
+            same = _same_model(r.executor, t.executor)
+            if same:
+                out.append(f"step {r.step}: the reviewer uses the same model ({same}) as the author of {target}")
     dependents = {d for s in plan.steps for d in s.depends_on}
     rev_text = plan.sections.get("Revisions", "")
     for s in plan.steps:
@@ -206,7 +234,7 @@ def _review_warnings(plan: Plan) -> list[str]:
             if not lines:
                 out.append(f"step {s.step} has no reviewer step (add one with the reviews column, or record in Revisions why the review is skipped)")
             elif all(NOT_OK_SKIP.search(ln) and not OK_SKIP.search(ln) for ln in lines):
-                out.append(f"step {s.step}: 'small' or 'simple' is not an accepted reason to skip the review; accepted: cost or token budget, no other CLI available, the user opted out")
+                out.append(f"step {s.step}: 'small' or 'simple' is not an accepted reason to skip the review; accepted: cost or token budget, no other model or CLI available, the user opted out")
     return out
 
 

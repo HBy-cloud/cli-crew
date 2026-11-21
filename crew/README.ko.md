@@ -34,7 +34,7 @@ crew accept T-01            # or: crew reject T-01 --reason "..."
 crew handoff --agent claude --task my-task --status Done
 ```
 
-agy는 읽기 작업에만 사용할 수 있습니다. 민감한 데이터 공유에는 `--approve-data-sharing`, 높은 추론 수준이나 승인 대상 모델에는 `--approve-cost`가 필요합니다. 승인 옵션은 사용자 확인 후 적용합니다. 워커 환경에서는 다른 제공업체의 인증 변수 등 자격 증명으로 분류된 변수를 제거합니다.
+agy 쓰기 작업은 세션별 `--settings` 파일로 프로젝트 안에만 쓰게 제한하며, 프로젝트 안의 새 파일은 경계 검사가 보고합니다. 민감한 데이터 공유에는 `--approve-data-sharing`, 높은 추론 수준이나 승인 대상 모델에는 `--approve-cost`가 필요합니다. 승인 옵션은 사용자 확인 후 적용합니다. 워커 환경에서는 다른 제공업체의 인증 변수 등 자격 증명으로 분류된 변수를 제거합니다.
 
 ## 전체 명령어
 
@@ -51,7 +51,7 @@ agy는 읽기 작업에만 사용할 수 있습니다. 민감한 데이터 공�
 | `crew routing --kind KIND --mode MODE [--json]` | 프로젝트에서 같은 종류·모드로 종료된 최근 워커 실행을 최대 10개 표시합니다. 종류는 investigate, implement, review, document, other입니다. |
 | `crew compare ID... [--json]` | 완료된 작업들의 검증 근거, 위반, 워커 소요 시간과 공급자별 사용량을 비교합니다. |
 | `crew contract check FILE [--agent CLI] [--effort LEVEL] [--model MODEL] [--json]` | 워커를 시작하기 전에 계약만 검사합니다. |
-| `crew run --contract FILE [--agent CLI] [--effort LEVEL] [--model MODEL] [--timeout MIN] [--with-result] [--json] [--approve-cost] [--approve-data-sharing]` | 워커를 실행하고 완료를 기다립니다. 타임아웃 단위는 분입니다. 기존 --allow-unbounded-write 옵션을 넣어도 agy 쓰기는 거부됩니다. |
+| `crew run --contract FILE [--agent CLI] [--effort LEVEL] [--model MODEL] [--timeout MIN] [--with-result] [--json] [--approve-cost] [--approve-data-sharing]` | 워커를 실행하고 완료를 기다립니다. 타임아웃 단위는 분입니다. 기존 --allow-unbounded-write 옵션은 폐기되어 무시됩니다. |
 | `crew status [--all] [--json]` | 현재·최근 작업 상태를 봅니다. 이전 작업까지 보려면 --all을 사용합니다. |
 | `crew result ID [--raw]` | 저장된 워커 결과를 읽습니다. --raw는 응답 전문을 표시합니다. |
 | `crew check ID [--recheck] [--json]` | 실행 검사 결과를 봅니다. --recheck는 저장된 근거로 다시 검사합니다. |

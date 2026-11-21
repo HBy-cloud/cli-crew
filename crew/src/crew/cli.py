@@ -300,8 +300,6 @@ def cmd_contract_check(a) -> int:
     hits = scan["restrictions"]
     if scan["privacy"]:
         r.warnings.append("sensitive-data hints in instructions; crew run needs --approve-data-sharing after asking the user")
-    if r.settings.get("agent") == "agy" and r.settings.get("mode") == "write":
-        r.warnings.append("agy write mode is unavailable because write boundaries cannot be enforced")
     lines = [f"contract: {c.path}"]
     lines += [f"ERROR: {e}" for e in r.errors]
     lines += [f"warning: {w}" for w in r.warnings]

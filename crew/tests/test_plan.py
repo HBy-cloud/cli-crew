@@ -332,7 +332,7 @@ class ReviewerTests(PlanHelpers, Base):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(PLAN7, encoding="utf-8")
         text = " | ".join(self.warnings())
-        self.assertIn("step R1: the reviewer uses the same CLI (codex) as the author of S1", text)
+        self.assertIn("step R1: the reviewer uses the same model (codex/default) as the author of S1", text)
         self.assertIn("step R2: the reviewer is main itself", text)
         self.assertIn("step S3 has no reviewer step", text)
         self.assertNotIn("step S1 has no reviewer step", text)
@@ -342,12 +342,51 @@ class ReviewerTests(PlanHelpers, Base):
         text = " | ".join(self.warnings())
         self.assertNotIn("step S3 has no reviewer step", text)
         self.assertIn("step S3: 'small' or 'simple' is not an accepted reason", text)
+        self.assertIn("no other model or CLI available", text)
+        path.write_text(PLAN7.replace("## Approvals", "## Revisions\n| date | change | reason or evidence |\n| --- | --- | --- |\n"
+                                      "| 2026-11-21 | S3 검증 생략 | 단순 보고서이지만 다른 모델 없음 | \n\n## Approvals"),
+                        encoding="utf-8")
+        self.assertNotIn("not an accepted reason", " | ".join(self.warnings()))
         path.write_text(PLAN7.replace("## Approvals", "## Revisions\n| date | change | reason or evidence |\n| --- | --- | --- |\n"
                                       "| 2026-11-21 | S3 review skipped | token budget is used up, no budget for another review | \n\n## Approvals"),
                         encoding="utf-8")
         text = " | ".join(self.warnings())
         self.assertNotIn("step S3 has no reviewer step", text)
         self.assertNotIn("not an accepted reason", text)
+
+    def test_reviewer_independence_by_model(self):
+        from crew.plan import _same_model
+        self.assertIsNone(_same_model("crew:codex/gpt-a/low", "crew:codex/gpt-b"))
+        self.assertIsNone(_same_model("crew:claude", "crew:codex"))
+        self.assertIsNone(_same_model("crew:codex", "main"))
+        self.assertEqual(_same_model("crew:codex/GPT-A/low", "crew:codex/gpt-a/high"), "codex/GPT-A")
+        self.assertEqual(_same_model("crew:codex/default/low", "crew:codex"), "codex/default")
+        self.assertIn("may be the same", _same_model("crew:codex/gpt-a", "crew:codex/default"))
+        self.runs.ensure()
+        path = self.runs.plan_path("P2")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        plan = (PLAN7.replace("| crew:codex | - | Implement", "| crew:codex/gpt-a | - | Implement")
+                .replace("| crew:codex | S1 | Review S1", "| crew:codex/gpt-b/low | S1 | Review S1")
+                .replace("| main | S1 | Review S1", "| main-subagent | S1 | Review S1"))
+        path.write_text(plan, encoding="utf-8")
+        text = " | ".join(self.warnings())
+        self.assertNotIn("step R1:", text)
+        self.assertNotIn("step R2:", text)
+        path.write_text(plan.replace("| crew:codex/gpt-a | - | Implement", "| main | - | Implement"), encoding="utf-8")
+        self.assertIn("step R2: the reviewer (main-subagent) runs on the same model as the author of S1",
+                      " | ".join(self.warnings()))
+
+    def test_worker_header_allows_web_reading_but_not_sending_project_data(self):
+        from crew.runner import HEADER
+        self.assertNotIn("send data over the network", HEADER)
+        self.assertIn("You may use web search and page reading tools", HEADER)
+        self.assertIn("Never send project content", HEADER)
+
+    def test_agy_write_contract_check_has_no_stale_unavailable_warning(self):
+        p = self.contract(tid="T-agy-w", agent="agy", mode="write", wp='["a.txt"]')
+        code, out, _ = crew("contract", "check", str(p), "--json")
+        self.assertEqual(code, 0)
+        self.assertNotIn("agy write mode is unavailable", " ".join(json.loads(out)["warnings"]))
 
     def test_review_block_parse(self):
         from crew import classify

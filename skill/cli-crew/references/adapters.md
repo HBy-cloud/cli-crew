@@ -7,13 +7,14 @@ print a VERSION WARNING when an installed CLI differs. Update both places togeth
 
 | agent | read | write | prompt | evidence |
 |---|---|---|---|---|
-| codex | `codex exec -s read-only -C <root> [--add-dir D] --skip-git-repo-check --json -o <result> -c model_reasoning_effort="<E>" -` | `-s workspace-write` | stdin | `-o` file, JSONL (`thread.started` → thread_id), `~/.codex/sessions` rollouts |
-| agy | `agy --mode plan --effort <E> --output-format stream-json --print-timeout <T>m [--add-dir D] --print=<instruction>` | refused by crew | short instruction pointing at `.agent-runs/<id>.prompt.md` | stream-json (`init.model`, `step_update`, `result`) |
-| claude | `claude -p --restricted --permission-mode plan --permission-prompts none --output-format json --no-session-persistence --effort <E> [--add-dir D]` | `--permission-mode acceptEdits` | stdin | JSON (`result`, `is_error`, `permission_denials`, `subagent_stats`, `total_cost_usd`) |
+| codex | `codex exec -s read-only -C <root> [--add-dir D ...] --skip-git-repo-check --json [--ephemeral] -o <result> -c model_reasoning_effort="<E>" [-m M] -` | `-s workspace-write` (no `--add-dir`) | stdin | `-o` file, JSONL (`thread.started` → thread_id, error events), `~/.codex/sessions` rollouts, stderr |
+| agy | `agy --mode plan --effort <E> [--model M] --output-format stream-json --print-timeout <T>m [--settings <file>] [--add-dir D ...] --print=<instruction>` | `--mode accept-edits` with a per-session `--settings` file (no `--add-dir`) | short instruction pointing at `.agent-runs/<id>.prompt.md` | stream-json (`init.model`, `step_update`, `result`, `conversation_id`), stderr |
+| claude | `claude -p --restricted --permission-mode plan --permission-prompts none --output-format json --no-session-persistence --effort <E> [--model M] [--add-dir D ...]` | `--permission-mode acceptEdits` (no `--add-dir`) | stdin | JSON (`result`, `is_error`, `permission_denials`, `subagent_stats`, `total_cost_usd`, `modelUsage`, `session_id`) |
 
 ## Known behaviour
-- Web (verified 2026-11-21, one run each): codex is BLOCKED because crew's worker header forbids network requests; agy ran `search_web` and claude ran `WebSearch`,
-  both with summaries only and no page fetch, so postings and deadlines stayed unverified. Do not hand them web collection that needs page contents.
+- Web (verified 2026-11-21, one run each, under the old no-network header): codex was BLOCKED by that header; agy ran `search_web` and claude ran `WebSearch`,
+  both with summaries only and no page fetch, so postings and deadlines stayed unverified. The header now allows reading the public web (2026-11-21
+  user decision) but forbids sending project content; real fetch ability per CLI is not re-verified. Do not rely on workers for page contents yet.
 - Safe-mode workers cannot run shell commands (codex sandbox `CreateProcessAsUserW` denied; agy print mode
   auto-denies commands; claude `--restricted` has no shell). Main runs tests/builds.
 - Exit code 0 does not mean success. agy prints `jetski: no output produced ... auto-denied` with exit 0.

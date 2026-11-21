@@ -27,7 +27,9 @@ HEADER = """# WORKER INSTRUCTIONS (added by crew)
 You are a WORKER agent invoked non-interactively by a main agent. Follow these rules strictly:
 - Do not invoke any other AI CLI (codex, agy, claude, copilot, gemini).
 - {subagent_rule}
-- Do not commit, push, install packages, send data over the network, or delete files.
+- Do not commit, push, install packages, or delete files.
+- You may use web search and page reading tools to read public information. Never send project content, file
+  contents, secrets, or personal data over the network; keep search queries to generic terms.
 - {mode_rule}
 - Assume shell commands are unavailable; use only file reading/editing tools.
 - Do not open secret files (.env, keys, tokens, certificates).
