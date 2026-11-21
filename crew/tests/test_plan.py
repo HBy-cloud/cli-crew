@@ -100,6 +100,16 @@ class PlanTests(PlanHelpers, Base):
         code, out, _ = crew("plan", "check", "P1", "--json")
         self.assertNotIn("Revisions", " ".join(json.loads(out)["warnings"]))
 
+    def test_blocked_step_is_valid_and_not_ready_and_blocks_done(self):
+        rows = ROWS.replace("| S2 | todo |", "| S2 | blocked |")
+        self.write_plan(rows=rows)
+        self.assertEqual(self.plan_errors(), [])
+        code, out, _ = crew("plan", "show", "P1", "--json")
+        self.assertNotIn("S2", json.dumps(json.loads(out).get("ready", [])))
+        self.write_plan(status="done", rows=rows)
+        code, out, _ = crew("plan", "check", "P1", "--json")
+        self.assertIn("S2", " ".join(json.loads(out)["warnings"]))
+
     def test_run_note_when_no_active_cplan(self):
         os.environ["FAKE_SCENARIO"] = "done"
         code, out, _ = crew("run", "--contract", str(self.contract()))

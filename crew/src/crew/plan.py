@@ -12,7 +12,7 @@ from crew.contract import SECRET_RES, ContractError, parse_frontmatter, parse_se
 
 STEP_ID_RE = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$"
 PLAN_STATUSES = ("active", "done", "abandoned")
-STEP_STATUSES = ("todo", "doing", "done", "dropped")
+STEP_STATUSES = ("todo", "doing", "blocked", "done", "dropped")
 COLUMNS = ("step", "status", "executor", "depends_on", "task", "verify")
 EXECUTOR_HELP = "main | main-subagent | crew:<agent>[/<model or default>[/<effort>]]"
 EXECUTOR_RE = re.compile(r"^(main|main-subagent|crew:(" + "|".join(AGENTS) + r")(/[^/\s|]+){0,2})$")
@@ -29,7 +29,7 @@ TODO: the outcome the user asked for and how main will verify it. This cplan cov
 | --- | --- | --- | --- | --- | --- |
 | S1 | todo | main | - | TODO | TODO |
 
-<!-- status: todo | doing | done | dropped
+<!-- status: todo | doing | blocked | done | dropped
      executor: {executors}
      depends_on: step ids separated by commas, or -
      Do not use '|' inside a cell. -->
@@ -209,7 +209,7 @@ def validate(plan: Plan) -> tuple[list[str], list[str]]:
     if cyc:
         errors.append("dependency cycle: " + " -> ".join(cyc))
     if plan.fields.get("status") == "done":
-        open_steps = [s.step for s in plan.steps if s.status in ("todo", "doing")]
+        open_steps = [s.step for s in plan.steps if s.status in ("todo", "doing", "blocked")]
         if open_steps:
             warnings.append(f"plan is done but steps are still open: {', '.join(open_steps)}")
 

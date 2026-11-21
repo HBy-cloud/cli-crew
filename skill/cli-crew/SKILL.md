@@ -45,7 +45,7 @@ Rules for your own subagents: they never run `crew` or delegate further, and the
 
 **cplan (crew-plan, managed with `crew plan`) first.** Before doing any step, right after `crew detect` and reading the instructions (section 1), write the
 cplan for the WHOLE task whenever it has two or more steps in total, whoever does them (you, your subagents, workers), or may continue
-in another session. It is the one plan that keeps the work consistent.
+in another session. Skip it only for a one-step task; "the steps are simple" is not a reason to skip.
 1. `crew plan new <ID>`, then edit `.agent-runs/plans/<ID>.md`: Goal (with how you will verify it), one Steps row per step, including
    your own (`executor`: `main`, `main-subagent`, or `crew:<agent>[/<model or default>[/<effort>]]`; `depends_on`; a concrete `verify`),
    and the Approvals needed. `crew plan check <ID>` must pass.
@@ -53,9 +53,9 @@ in another session. It is the one plan that keeps the work consistent.
 3. Link each crew contract to its step (`crew contract new ... --plan <ID> --step <STEP>`).
 4. When evidence changes the plan (a step fails, a worker is blocked, a source is unavailable, scope shifts), YOU edit the cplan before
    acting: add, change or drop steps and add a Revisions row (date, change, reason or evidence). Never drift from it silently.
-5. Keep step status (`todo`, `doing`, `done`, `dropped`) current; `crew plan show <ID>` lists linked runs and ready steps. At the end
-   set the status to `done` or `abandoned`.
-Skip the cplan only for a one-step task; "the steps are simple" is not a reason to skip.
+5. Keep step status (`todo`, `doing`, `blocked`, `done`, `dropped`) current; `crew plan show <ID>` lists linked runs and ready steps.
+   If a blocker stops you: mark the step `blocked`, add a Revisions row with the reason, run `crew handoff`, tell the user. At the end
+   set the plan status to `done` or `abandoned`.
 
 ## 1. Start
 1. Run `crew detect --paths <target paths>`.

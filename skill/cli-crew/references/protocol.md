@@ -31,7 +31,7 @@ Sections: `## Goal` (outcome and how main verifies it), `## Steps` table, `## Ap
 | column | values |
 |---|---|
 | step | `^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$`, unique |
-| status | todo, doing, done, dropped |
+| status | todo, doing, blocked, done, dropped |
 | executor | main, main-subagent, `crew:<agent>[/<model or default>[/<effort>]]` |
 | depends_on | comma-separated step ids, or `-`; no cycles |
 | task, verify | concrete text; not empty or TODO |
