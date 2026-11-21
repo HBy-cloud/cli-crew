@@ -310,6 +310,7 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
         "cwd": str(root), "add_dirs": [str(p) for p in chk.add_dirs_abs], "write_paths": s["write_paths"],
         "allow_subagents": s["allow_subagents"], "ephemeral": s["ephemeral"],
         "timeout_min": s["timeout_min"], "max_retries": s["max_retries"], "retry_of": s.get("retry_of"),
+        "plan": s.get("plan"), "plan_step": s.get("plan_step"),
         "crew_pid": os.getpid(), "crew_create_time": procutil.create_time(os.getpid()),
         "worker_pid": None, "worker_create_time": None,
         "started": started, "started_epoch": time.time(), "ended": None, "duration_s": None,

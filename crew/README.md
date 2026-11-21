@@ -42,7 +42,10 @@ Run commands from the target project. Replace uppercase placeholders with your v
 | --- | --- |
 | `crew init` | Create missing project instructions; reuse existing guides. |
 | `crew detect [--paths PATH ...] [--json]` | List available workers, applicable instructions and active runs. |
-| `crew contract new ID [--agent CLI] [--mode MODE] [--kind KIND] [--write PATH ...]` | Create the contract template. Fill in the objective, context and completion criteria before running. |
+| `crew plan new ID` | Create a plan template under `.agent-runs/plans/` for a multi-step goal. |
+| `crew plan check ID [--json]` | Validate a plan: step ids, executors, dependencies, verification entries. |
+| `crew plan show [ID] [--json]` | List plans, or show one plan with linked runs, ready steps and status mismatches. |
+| `crew contract new ID [--agent CLI] [--mode MODE] [--kind KIND] [--write PATH ...] [--plan ID --step STEP]` | Create the contract template, optionally linked to a plan step. Fill in the objective, context and completion criteria before running. |
 | `crew routing --kind KIND --mode MODE [--json]` | Show up to ten recent completed worker runs with matching mode and kind (investigate, implement, review, document, other). |
 | `crew compare ID... [--json]` | Compare verification evidence, violations, worker time and provider-specific usage for completed runs. |
 | `crew contract check FILE [--agent CLI] [--effort LEVEL] [--model MODEL] [--json]` | Validate a contract without starting a worker. |

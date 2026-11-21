@@ -30,6 +30,10 @@ class Runs:
         self.active = self.locks / "active"
         self.reserve_lock = self.locks / "reserve.lock"
         self.history = self.dir / "history.jsonl"
+        self.plans = self.dir / "plans"
+
+    def plan_path(self, plan_id: str) -> Path:
+        return self.plans / f"{plan_id}.md"
 
     def ensure(self) -> None:
         self.contracts.mkdir(parents=True, exist_ok=True)

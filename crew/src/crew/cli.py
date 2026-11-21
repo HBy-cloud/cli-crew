@@ -8,11 +8,12 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from crew import __version__, adapters, citations, classify, contract as ct, routing, runner, snapshot, state as st
+from crew import __version__, adapters, citations, classify, contract as ct, plan as pl, routing, runner, snapshot, state as st
 from crew.common import (
     AGENTS, EXIT_DUP, EXIT_GUARD, EXIT_OK, EXIT_USAGE, KST, TASK_ID_RE, CrewError, atomic_write_text,
     home_dir, is_drive_root, load_config, now, now_iso, parse_iso, read_json, read_text, real, rel_to,
@@ -108,6 +109,8 @@ def cmd_detect(a) -> int:
     for agent in AGENTS:
         ver = adapters.cli_version(agent)
         clis[agent] = {"available": ver is not None, "version": ver,
+                       "verified_version": adapters.VERIFIED_VERSIONS.get(agent),
+                       "version_warning": adapters.version_warning(agent, ver),
                        "default_model": runner.default_model(agent) if ver else None}
     git = snapshot.is_git_repo(root)
     dirty = None
@@ -130,6 +133,9 @@ def cmd_detect(a) -> int:
     for k, v in clis.items():
         lines.append(f"cli {k}: {'OK ' + str(v['version']) if v['available'] else 'not available'}"
                      + (f", default model {v['default_model']}" if v.get("default_model") else ""))
+    for k, v in clis.items():
+        if v["version_warning"]:
+            lines.append(f"VERSION WARNING: {v['version_warning']}")
     lines.append(f"instruction files ({len(files)}): " + (", ".join(files) if files else "none"))
     if hits:
         lines.append("POSSIBLE DELEGATION RESTRICTIONS (read and judge yourself):")
@@ -162,8 +168,115 @@ def cmd_contract_new(a) -> int:
     path = runs.contracts / f"{a.task_id}.md"
     if path.exists() or a.task_id in runs.registry():
         raise CrewError(EXIT_DUP, f"task_id '{a.task_id}' already used")
-    atomic_write_text(path, ct.render_template(a.task_id, a.agent, a.mode, a.write or [], a.kind))
+    if (a.plan is None) != (a.step is None):
+        raise CrewError(EXIT_USAGE, "--plan and --step must be given together")
+    atomic_write_text(path, ct.render_template(a.task_id, a.agent, a.mode, a.write or [], a.kind, a.plan, a.step))
     print(str(path))
+    return EXIT_OK
+
+
+# ------------------------------------------------------------ plan (SPEC 4.13)
+
+def _plan_records(runs: st.Runs) -> list[dict[str, Any]]:
+    """Current state files first (they win), then archived history samples."""
+    return list(runs.iter_states()) + list(runs.iter_history())
+
+
+def _load_plan(runs: st.Runs, plan_id: str) -> pl.Plan:
+    if not re.fullmatch(TASK_ID_RE, plan_id):
+        raise CrewError(EXIT_USAGE, "invalid plan id")
+    try:
+        return pl.load(runs.plan_path(plan_id))
+    except ct.ContractError as e:
+        raise CrewError(EXIT_USAGE, str(e))
+
+
+def cmd_plan_new(a) -> int:
+    _, runs = _root_and_runs()
+    if not re.fullmatch(TASK_ID_RE, a.plan_id):
+        raise CrewError(EXIT_USAGE, "invalid plan id")
+    runs.ensure()
+    path = runs.plan_path(a.plan_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        raise CrewError(EXIT_DUP, f"plan '{a.plan_id}' already exists: {path}")
+    # Write a complete temp file, then hard-link it into place: atomic and never overwrites (SPEC 8).
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(pl.render_template(a.plan_id))
+        os.link(tmp, path)
+    except FileExistsError:
+        raise CrewError(EXIT_DUP, f"plan '{a.plan_id}' already exists: {path}")
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+    print(str(path))
+    return EXIT_OK
+
+
+def _redacted(obj: Any) -> Any:
+    """Plan text is user-written; hide secret-looking strings in every printed value."""
+    if isinstance(obj, str):
+        return pl.redact(obj)
+    if isinstance(obj, list):
+        return [_redacted(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _redacted(v) for k, v in obj.items()}
+    return obj
+
+
+def cmd_plan_check(a) -> int:
+    _, runs = _root_and_runs()
+    p = _load_plan(runs, a.plan_id)
+    errors, warnings = pl.validate(p)
+    notes = pl.step_notes(p, pl.linked_runs(a.plan_id, _plan_records(runs))) if not errors else []
+    lines = [f"plan: {p.path}"] + [f"ERROR: {e}" for e in errors] + [f"warning: {w}" for w in warnings + notes]
+    lines.append("OK" if not errors else f"{len(errors)} error(s)")
+    emit(_redacted({"ok": not errors, "errors": errors, "warnings": warnings + notes}), a.json, _redacted(lines))
+    return EXIT_OK if not errors else EXIT_USAGE
+
+
+def _plan_view(runs: st.Runs, p: pl.Plan) -> dict[str, Any]:
+    links = pl.linked_runs(str(p.plan_id), _plan_records(runs))
+    errors, warnings = pl.validate(p)
+    return {
+        "plan_id": p.plan_id, "status": p.fields.get("status"), "path": str(p.path),
+        "steps": [{**vars(s), "runs": links.get(s.step, [])} for s in p.steps],
+        "ready": pl.ready_steps(p), "errors": errors,
+        "notes": warnings + (pl.step_notes(p, links) if not errors else []),
+        "summary": pl.summary_line(p, links),
+    }
+
+
+def cmd_plan_show(a) -> int:
+    _, runs = _root_and_runs()
+    if not a.plan_id:
+        rows, lines = [], []
+        for path in sorted(runs.plans.glob("*.md")) if runs.plans.is_dir() else []:
+            try:
+                p = pl.load(path)
+            except ct.ContractError as e:
+                rows.append({"plan_id": path.stem, "error": str(e)})
+                lines.append(f"{path.stem} | unreadable: {e}")
+                continue
+            done = sum(s.status in ("done", "dropped") for s in p.steps)
+            rows.append({"plan_id": path.stem, "status": p.fields.get("status"), "steps": len(p.steps), "closed": done})
+            lines.append(f"{path.stem} | {p.fields.get('status')} | {done}/{len(p.steps)} steps closed")
+        emit(rows, a.json, ["plan | status | progress"] + lines if lines else ["no plans"])
+        return EXIT_OK
+    view = _plan_view(runs, _load_plan(runs, a.plan_id))
+    lines = [f"plan {view['plan_id']} ({view['status']}): {view['path']}"]
+    for s in view["steps"]:
+        deps = ",".join(s["depends_on"]) or "-"
+        lines.append(f"  {s['step']} | {s['status']} | {s['executor']} | after {deps} | {s['task']}")
+        for r in s["runs"]:
+            lines.append(f"      run {r['task_id']}: {r['agent']} {r['status']} verdict={r['verdict']}")
+    lines.append("ready: " + (", ".join(view["ready"]) or "none"))
+    lines += [f"ERROR: {e}" for e in view["errors"]] + [f"note: {n}" for n in view["notes"]]
+    emit(_redacted(view), a.json, _redacted(lines))
     return EXIT_OK
 
 
@@ -208,6 +321,9 @@ def summarize(state: dict[str, Any], runs: Any = None) -> list[str]:
              f"attempts={len(state.get('attempts', []))}, {state.get('duration_s')}s)"]
     if state.get("failure_reason"):
         lines.append(f"reason: {state['failure_reason']}")
+    warning = adapters.version_warning(str(state.get("agent")), state.get("cli_version"))
+    if warning:
+        lines.append(f"VERSION WARNING: {warning}")
     lines.append(f"worker_status: {state.get('worker_status')}")
     v = state.get("boundary_violations") or []
     lines.append(f"boundary violations: {len(v)}" + (": " + ", ".join(f"{x['kind']} {x['path']}" for x in v[:10]) if v else ""))
@@ -488,6 +604,8 @@ HANDOFF_EN = """# Handoff
 {diffstat}
 ## Delegated runs (crew)
 {runs}
+## Plans (crew)
+{plans}
 ## Verification
 {verification}
 
@@ -507,6 +625,8 @@ HANDOFF_KO = """# Handoff
 {diffstat}
 ## 위임 실행 (crew)
 {runs}
+## 계획 (crew)
+{plans}
 ## 검증
 {verification}
 
@@ -548,10 +668,30 @@ def cmd_handoff(a) -> int:
         if out:
             diffstat = "\n```\n" + "\n".join(out.splitlines()[-30:]) + "\n```\n"
     tpl = HANDOFF_KO if lang == "ko" else HANDOFF_EN
+    plan_ids = {str(s["plan"]) for s in states if s.get("plan")}
+    if runs.plans.is_dir():
+        for path in runs.plans.glob("*.md"):
+            try:
+                if pl.load(path).fields.get("status") == "active":
+                    plan_ids.add(path.stem)
+            except ct.ContractError:
+                continue
+    plan_lines = []
+    records = _plan_records(runs)
+    for pid in sorted(plan_ids):
+        try:
+            p = pl.load(runs.plan_path(pid))
+        except ct.ContractError:
+            plan_lines.append(f"- {pid}: plan file missing or unreadable")
+            continue
+        links = pl.linked_runs(pid, records)
+        plan_lines.append(pl.redact("- " + pl.summary_line(p, links)))
+        plan_lines += [pl.redact(f"  - note: {n}") for n in pl.step_notes(p, links)]
     checks = [f"- {s['task_id']}: {s['main_verification']}" for s in states if s.get("main_verification")]
     text = tpl.format(agent=a.agent, task=a.task, status=a.status, time=t.strftime("%Y-%m-%d %H:%M"),
                       verification="\n".join(checks) or ('- TODO: main이 실행한 검증과 결과.' if lang == "ko" else '- TODO: checks run by the main agent and their results.'),
-                      diffstat=diffstat, runs="\n".join(run_lines) + "\n")
+                      diffstat=diffstat, runs="\n".join(run_lines) + "\n",
+                      plans="\n".join(plan_lines or ["- none"]) + "\n")
     folder = base / t.strftime("%Y-%m-%d")
     folder.mkdir(parents=True, exist_ok=True)
     stem = f"{t.strftime('%H%M')}-{_slug(a.agent)}-{_slug(a.task)}"
@@ -663,6 +803,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--mode", choices=("read", "write"), default="read")
     sp.add_argument("--write", nargs="*")
     sp.add_argument("--kind", choices=ct.TASK_KINDS)
+    sp.add_argument("--plan", help="plan id this task belongs to (requires --step)")
+    sp.add_argument("--step", help="step id in that plan")
     sp.set_defaults(func=cmd_contract_new)
     sp = csub.add_parser("check")
     sp.add_argument("file")
@@ -671,6 +813,20 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--model")
     add_json(sp)
     sp.set_defaults(func=cmd_contract_check)
+
+    pp = sub.add_parser("plan", help="create, check or show main's plan for a multi-step goal")
+    psub = pp.add_subparsers(dest="pcmd", required=True)
+    sp = psub.add_parser("new", help="create .agent-runs/plans/<PLAN_ID>.md from the template")
+    sp.add_argument("plan_id")
+    sp.set_defaults(func=cmd_plan_new)
+    sp = psub.add_parser("check", help="validate a plan and compare step status with linked runs")
+    sp.add_argument("plan_id")
+    add_json(sp)
+    sp.set_defaults(func=cmd_plan_check)
+    sp = psub.add_parser("show", help="list plans, or show one plan with linked runs and ready steps")
+    sp.add_argument("plan_id", nargs="?")
+    add_json(sp)
+    sp.set_defaults(func=cmd_plan_show)
 
     sp = sub.add_parser("run", help="run a worker for a contract (waits until done)")
     sp.add_argument("--contract", dest="file", required=True)

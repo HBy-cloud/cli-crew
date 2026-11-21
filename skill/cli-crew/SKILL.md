@@ -1,6 +1,6 @@
 ---
 name: cli-crew
-description: Coordinate multi-step coding, investigation, and review work across codex, agy, and claude with crew. Set up missing project instructions when the user asks for onboarding or invokes this skill by name. Use for project onboarding or when a goal benefits from independent investigation, bounded implementation, or a second review, even when the user names no worker. Main chooses the workers and sequence, verifies results, and finishes the requested task.
+description: Coordinate multi-step coding, investigation, and review work across codex, agy, and claude with crew. Set up missing project instructions when the user asks for onboarding or invokes this skill by name. Use for project onboarding or when a goal benefits from independent investigation, bounded implementation, or a second review, even when the user names no worker. Main plans the steps, chooses between doing the work itself, its own subagents, and crew workers, verifies results, and finishes the requested task.
 ---
 
 # cli-crew
@@ -22,11 +22,40 @@ If setup was the whole request, review the file and stop. Otherwise continue the
 
 ## 0. Choose the workflow from the goal
 The user supplies the outcome. Main owns task decomposition, worker selection, sequencing, and final verification. Honor explicit preferences. Do not ask the user to assign routine stages.
-- Weigh the tokens and time needed to brief a worker and verify its result against the time saved or the value of an independent check.
-- For small or tightly coupled work, finish directly without creating crew runs.
-- For one separable question or edit, delegate just that part. Keep shell commands, tests, and builds with main.
+- Weigh the tokens and time needed to brief a helper and verify its result against the time saved or the value of an independent check.
 - For larger goals, identify dependencies. Run independent read tasks in parallel when useful. Run a bounded write alone. Add an independent review when its value justifies another call.
-- After each run, verify and judge its result before using it. Choose the next in-scope step from verified findings and the original goal. Continue without waiting for a new user prompt until the goal is verified or a real blocker requires user input. Keep existing sharing, cost, scope, and retry limits.
+- After each step, verify and judge its result before using it. Choose the next in-scope step from verified findings and the original goal. Continue without waiting for a new user prompt until the goal is verified or a real blocker requires user input. Keep existing sharing, cost, scope, and retry limits.
+
+**Choose an executor for each step**, cheapest adequate first:
+- `main`: small or tightly coupled work, and anything needing shell commands, tests, or builds.
+- `main-subagent`: your CLI's built-in subagents, if it has them, for same-model exploration, parallel search, or
+  summaries. Content stays with your current provider and no crew record is created.
+- `crew:<agent>`: a crew worker when you need a different model's independent review, a scoped edit with a
+  boundary check, or a recorded result for later routing decisions.
+
+Rules for your own subagents: they never run `crew` or delegate further; only you delegate. While any crew run is
+active, neither you nor your subagents edit project files. Verify subagent output as you would a worker's, and
+record what they did in the plan or handoff.
+
+**Parallel work.** Parallelize reads only; edits run one at a time, whether by you, a subagent, or a worker.
+- Independent same-model searches or investigations: your own subagents, if your CLI has them.
+- The same question that benefits from different perspectives, or reviews: crew read workers in parallel
+  (up to 3), preferably on different CLIs.
+- Your usage limits are tight, the results must be recorded, or your CLI has no subagents: crew read workers.
+- Cross-check parallel results against each other. Where they disagree, decide from the source yourself.
+
+**Plan multi-step work.** When the goal needs two or more steps handed to subagents or workers, or work may
+continue in another session, write a plan before the first handoff:
+1. `crew plan new <PLAN_ID>`, then edit `.agent-runs/plans/<PLAN_ID>.md`: Goal (with how you will verify it),
+   one Steps row per step (`executor`: `main`, `main-subagent`, or `crew:<agent>[/<model or default>[/<effort>]]`;
+   `depends_on`; a concrete `verify`), and the Approvals needed. `crew plan check <PLAN_ID>` must pass.
+2. Tell the user the plan in a few lines and continue. Stop for approvals listed in the plan and for any
+   approval the run rules require later (restrictions, sensitive data, cost).
+3. Link each crew contract to its step (`crew contract new ... --plan <PLAN_ID> --step <STEP>`).
+4. Update step status (`todo`, `doing`, `done`, `dropped`) as you go. Editing the plan file during a run is allowed.
+   `crew plan show <PLAN_ID>` lists linked runs, steps ready to start, and status mismatches. When the goal is
+   verified or abandoned, set the plan status to `done` or `abandoned`.
+Skip the plan for small tasks and single delegations.
 
 ## 1. Start
 1. Run `crew detect --paths <target paths>`.
@@ -38,6 +67,8 @@ The user supplies the outcome. Main owns task decomposition, worker selection, s
    before they answer. Proceed with delegation only if they allow it, and only for this session.
    A small task you finish yourself without any worker needs no question.
 4. If `detect` warns about API key environment variables, tell the user workers may bill the API.
+   If it shows a VERSION WARNING, tell the user that worker's results may be misclassified. Prefer another
+   worker, or read its full response (`crew result <ID> --raw`) before trusting the status.
 5. **Delegation sends project content to another provider** (codex → OpenAI, agy → Google, claude → Anthropic).
    If `detect` shows SENSITIVE DATA HINTS (personal data, resumes, customer data, confidential material),
    ask the user before delegating; only then pass `--approve-data-sharing` to `crew run`.
@@ -61,11 +92,12 @@ For each delegated task, choose the CLI, model and reasoning effort together. Us
 - A different model than the author is best for independent review.
 
 ## 3. Contract
-1. `crew contract new <TASK_ID> --agent <codex|agy|claude> --kind <kind> --mode <read|write> [--write <paths...>]`
+1. `crew contract new <TASK_ID> --agent <codex|agy|claude> --kind <kind> --mode <read|write> [--write <paths...>] [--plan <PLAN_ID> --step <STEP>]`
 2. Edit `.agent-runs/contracts/<TASK_ID>.md`: Objective, Context (file **paths**, not contents), Done when.
    - `mode: read` is the default. Use `write` only with explicit `write_paths` inside the project.
    - `add_dirs` (outside read paths) only in read mode. Need outside material for a write task? Split it.
-   - `allow_subagents: false` unless a read-only research task truly benefits.
+   - `allow_subagents: true` only for a broad read investigation across several independent areas; otherwise false.
+     Codex token counts cover the worker's main thread, so they can understate subagent use.
    - `effort: low` by default; `medium` if needed. `high`+ needs user approval (see 4).
    - Re-delegating a rejected task: new TASK_ID with `retry_of: <old id>`.
 3. `run` validates the contract before launch. Use `crew contract check <file>` for a separate preflight when needed. Never put secrets in a contract.
@@ -73,7 +105,7 @@ For each delegated task, choose the CLI, model and reasoning effort together. Us
 ## 4. Run
 - `crew run --contract <file> --with-result` waits until the worker finishes.
 - Parallel: up to 3 **read** tasks at once using your CLI's background execution. A **write** task runs alone.
-- While a worker runs, **do not edit project files yourself** (it would be attributed to the worker).
+- While a worker runs, **neither you nor your subagents edit project files** (changes would be attributed to the worker).
 - Exit 3 is a guard; read the message and act on its cause. Never add an approval flag the message did not ask for.
   "cost approval required": ask the user; only then add `--approve-cost`.
   Sensitive data: ask the user (see 1-5); only then add `--approve-data-sharing`.
@@ -106,7 +138,7 @@ For each delegated task, choose the CLI, model and reasoning effort together. Us
 
 ## 7. Finish
 - `crew handoff --agent <your-name> --task <slug> --status <Done|In progress|Blocked>` creates a draft in
-  the project's handoff folder. Fill in every TODO with verified facts only.
+  the project's handoff folder. It lists active plans and their linked runs. Fill in every TODO with verified facts only.
 - If the project already has progress/decision documents, update those; do not create new ones.
 - No commit, push, delete, deploy, or external sending without an explicit user request.
 - Cleanup of worker session logs only when the user wants it: `crew clean` (preview) → `crew clean --yes`.

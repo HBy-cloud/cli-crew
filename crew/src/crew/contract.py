@@ -30,6 +30,8 @@ FIELDS: dict[str, Any] = {
     "max_retries": 1,
     "retry_of": None,
     "ephemeral": False,
+    "plan": None,
+    "plan_step": None,
 }
 
 REQUIRED_SECTIONS = ("Objective", "Done when")
@@ -45,7 +47,7 @@ SECRET_RES = [re.compile(p) for p in (
 )]
 
 TEMPLATE = """---
-task_id: {task_id}
+task_id: "{task_id}"
 agent: {agent}
 mode: {mode}
 task_kind: {task_kind}
@@ -58,6 +60,8 @@ timeout_min: 20
 max_retries: 1
 retry_of: null
 ephemeral: false
+plan: {plan}
+plan_step: {plan_step}
 ---
 ## Objective
 TODO: one or two sentences describing the goal.
@@ -192,10 +196,13 @@ def load(path: str | os.PathLike) -> Contract:
     return Contract(path=p, fields=fields, body=body, sections=parse_sections(body), unknown=unknown)
 
 
-def render_template(task_id: str, agent: str | None, mode: str, write_paths: list[str], task_kind: str | None = None) -> str:
+def render_template(task_id: str, agent: str | None, mode: str, write_paths: list[str], task_kind: str | None = None,
+                    plan: str | None = None, plan_step: str | None = None) -> str:
     wp = "[" + ", ".join(write_paths) + "]" if write_paths else "[]"
+    def q(v):
+        return f'"{v}"' if v else "null"
     return TEMPLATE.format(task_id=task_id, agent=agent or "null", mode=mode, write_paths=wp,
-                           task_kind=task_kind or "null")
+                           task_kind=task_kind or "null", plan=q(plan), plan_step=q(plan_step))
 
 
 # ------------------------------------------------------------ merge + validate
@@ -329,6 +336,36 @@ def validate(c: Contract, s: dict[str, Any], root: Path, runs: Runs, cfg: dict[s
             errors.append("ephemeral is codex-only")
         if not s.get("allow_subagents"):
             errors.append("ephemeral=true with allow_subagents=false is not allowed (subagent ban could not be verified)")
+
+    # plan link (SPEC 4.13)
+    plan_id, plan_step = s.get("plan"), s.get("plan_step")
+    if (plan_id is None) != (plan_step is None):
+        errors.append("plan and plan_step must be set together")
+    elif plan_id is not None:
+        from crew import plan as pl
+        if not isinstance(plan_id, str) or not re.fullmatch(TASK_ID_RE, plan_id):
+            errors.append(f"plan must be a plan id matching {TASK_ID_RE}")
+        else:
+            try:
+                p = pl.load(runs.plan_path(plan_id))
+            except ContractError as e:
+                errors.append(f"plan '{plan_id}': {e}")
+            else:
+                if pl.validate(p)[0]:
+                    errors.append(f"plan '{plan_id}' is invalid; run: crew plan check {plan_id}")
+                step = p.step(str(plan_step))
+                if step is None:
+                    errors.append(f"plan '{plan_id}' has no step '{plan_step}'")
+                else:
+                    want = pl.executor_agent(step.executor)
+                    if want is None:
+                        warnings.append(f"plan step {plan_step} executor is {step.executor}; "
+                                        "update the plan if you delegate it")
+                    elif agent and want != agent:
+                        warnings.append(f"plan step {plan_step} names {want} but the contract uses {agent}; "
+                                        "update one of them")
+                if p.fields.get("status") != "active":
+                    warnings.append(f"plan '{plan_id}' status is {p.fields.get('status')}")
 
     # body sections
     for name in REQUIRED_SECTIONS:

@@ -44,7 +44,10 @@ agy는 읽기 작업에만 사용할 수 있습니다. 민감한 데이터 공�
 | --- | --- |
 | `crew init` | 기존 지침을 재사용하고 없으면 프로젝트 지침을 만듭니다. |
 | `crew detect [--paths PATH ...] [--json]` | 사용 가능한 워커와 적용할 지침, 실행 중인 작업을 확인합니다. |
-| `crew contract new ID [--agent CLI] [--mode MODE] [--kind KIND] [--write PATH ...]` | 계약 초안을 만듭니다. 실행 전에 목표·맥락·완료 조건을 채웁니다. |
+| `crew plan new ID` | 여러 단계 목표를 위한 계획 초안을 `.agent-runs/plans/`에 만듭니다. |
+| `crew plan check ID [--json]` | 계획의 단계 ID, 실행 주체, 의존 관계, 검증 항목을 검사합니다. |
+| `crew plan show [ID] [--json]` | 계획 목록을 보거나, 한 계획의 연결된 실행·시작 가능한 단계·상태 불일치를 봅니다. |
+| `crew contract new ID [--agent CLI] [--mode MODE] [--kind KIND] [--write PATH ...] [--plan ID --step STEP]` | 계약 초안을 만듭니다. 계획의 단계에 연결할 수 있습니다. 실행 전에 목표·맥락·완료 조건을 채웁니다. |
 | `crew routing --kind KIND --mode MODE [--json]` | 프로젝트에서 같은 종류·모드로 종료된 최근 워커 실행을 최대 10개 표시합니다. 종류는 investigate, implement, review, document, other입니다. |
 | `crew compare ID... [--json]` | 완료된 작업들의 검증 근거, 위반, 워커 소요 시간과 공급자별 사용량을 비교합니다. |
 | `crew contract check FILE [--agent CLI] [--effort LEVEL] [--model MODEL] [--json]` | 워커를 시작하기 전에 계약만 검사합니다. |

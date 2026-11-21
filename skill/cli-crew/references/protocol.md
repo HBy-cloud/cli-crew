@@ -18,8 +18,26 @@ Source of truth: `docs/SPEC.md` (v1.0) in the cli-crew repository. This is a con
 | max_retries | 0 or 1 | retry only on transient errors, never after partial writes or usage limits |
 | retry_of | previous REJECTED task id | chain limited to two rejections |
 | ephemeral | true/false | codex only; requires allow_subagents=true |
+| plan | plan id or null | set together with plan_step; the plan must pass `crew plan check` |
+| plan_step | step id or null | must exist in the plan; a different executor in the plan is a warning |
 
 Body sections `## Objective` and `## Done when` are required.
+
+## Plans
+File: `.agent-runs/plans/<plan_id>.md` (`crew plan new`). Frontmatter `plan_id` (equals file name), `status`: active | done | abandoned.
+Sections: `## Goal` (outcome and how main verifies it), `## Steps` table, `## Approvals`, `## Notes`.
+
+| column | values |
+|---|---|
+| step | `^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$`, unique |
+| status | todo, doing, done, dropped |
+| executor | main, main-subagent, `crew:<agent>[/<model or default>[/<effort>]]` |
+| depends_on | comma-separated step ids, or `-`; no cycles |
+| task, verify | concrete text; not empty or TODO |
+
+`crew plan show <id>` lists linked runs per step and the todo steps whose dependencies are all done or dropped.
+It notes mechanical mismatches: a crew step marked done without an accepted run, an accepted run on a todo or
+dropped step, a run by a different agent than the executor, runs on main or main-subagent steps, and runs on unknown steps.
 
 ## Statuses (first match wins)
 The final AGY result event can report an error even when the process exits 0. An explicit terminal failure takes precedence over a worker's success footer. A recovered step error on a successful terminal result does not by itself fail the run.

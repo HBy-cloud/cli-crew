@@ -41,4 +41,6 @@ def comparison_sample(state: dict[str, Any]) -> dict[str, Any]:
         "boundary_check": state.get("boundary_check"),
         "subagent_violation": state.get("subagent_violation"),
         "failure_reason": state.get("failure_reason"),
+        "plan": state.get("plan"),
+        "plan_step": state.get("plan_step"),
     }

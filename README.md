@@ -13,11 +13,12 @@ cli-crew lets the AI CLI you are already using (the *main* agent) hand bounded w
 
 ![The main agent defines a contract, a worker runs it, and the main agent verifies the result.](docs/assets/workflow.svg)
 
-[Features](#features) · [Installation](#installation) · [Quick start](#quick-start) · [Commands](#commands) · [Inspecting a run](#inspecting-a-run) · [Workers](#supported-workers) · [Safety](#safety-model-and-limitations) · [Update](#updating) · [Uninstall](#uninstalling) · [CLI reference](crew/README.md)
+[Features](#features) · [Installation](#installation) · [Quick start](#quick-start) · [Commands](#commands) · [Inspecting a run](#inspecting-a-run) · [Workers](#supported-workers) · [Safety](#safety-model-and-limitations) · [Compared](#how-cli-crew-differs-from-other-orchestrators) · [Update](#updating) · [Uninstall](#uninstalling) · [CLI reference](crew/README.md)
 
 ## Features
 
-- **Goal-driven delegation.** You state the outcome. The main agent decides what to do itself, what to hand to a worker, and when an independent review from a different model is worth the extra call.
+- **Goal-driven delegation.** You state the outcome. The main agent decides what to do itself, what to give its own subagents, what to hand to a worker, and when an independent review from a different model is worth the extra call.
+- **Plans for multi-step goals.** The main agent writes a plan in which each step names its executor (itself, its own built-in subagents, or a crew worker), its dependencies, and how it will be verified. Runs are linked to steps, so progress survives a handoff.
 - **Explicit task contracts.** Each delegated task is a Markdown contract with an objective, file paths for context, completion criteria, and, for edits, the exact paths the worker may change.
 - **Verification before acceptance.** Every run is classified (`DONE`, `DONE_UNVERIFIED`, `PARTIAL`, `FAILED`, ...), checked for out-of-scope file changes and subagent use, and must be accepted or rejected by the main agent with a recorded reason.
 - **Guardrails by default.** Read-only mode is the default, writes run one at a time, bypass flags are refused, credential-like environment variables are stripped from worker processes, and higher-cost or data-sharing runs require your approval.
@@ -72,6 +73,7 @@ The main agent normally runs these for you. You can also use them directly in Po
 | Stage | Commands |
 | --- | --- |
 | Prepare the project | `crew init`, `crew detect` |
+| Plan a multi-step goal | `crew plan new`, `crew plan check`, `crew plan show` |
 | Choose a worker | `crew routing`, `crew compare` |
 | Define the task | `crew contract new`, `crew contract check` |
 | Run and monitor | `crew run`, `crew status`, `crew cancel` |
@@ -118,6 +120,20 @@ Adapters were verified with codex-cli 0.171.0, agy 1.5.13, and Claude Code 2.1.3
 - **No automatic rollback.** `crew` reports violations but does not revert changes.
 
 The full rules are in the [verification and approval protocol](skill/cli-crew/references/protocol.md).
+
+## How cli-crew differs from other orchestrators
+
+Several tools already let Claude Code call Codex, Gemini or Antigravity, from single-purpose "second opinion" skills to full multi-agent orchestrators such as [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode). Those tools optimize for autonomy. cli-crew optimizes for control:
+
+| | Autonomy-first orchestrators (e.g. oh-my-claudecode) | cli-crew |
+| --- | --- | --- |
+| Goal | Run teams of agents until the goal passes | Delegate only when it pays off; small work stays with the main agent |
+| Orchestrator | Claude Code | Any of Claude Code, Codex or Antigravity |
+| Worker permissions | Headless workers can run with auto-approve flags so they work unattended (their SECURITY.md lists Codex `--dangerously-bypass-approvals-and-sandbox` and Gemini `--approval-mode yolo`) | Workers run in safe modes only; bypass flags are refused |
+| Boundaries between agents | Agents share the filesystem (listed as a known limitation in their SECURITY.md) | Each write task names its paths; visible changes outside them are reported (ignored files and excluded folders are not checked) |
+| "Done" | Automated verify/fix loops until tests, build and lint pass | Anything short of a clean DONE needs the main agent's recorded verification before acceptance; the skill asks for it on every acceptance |
+
+If you want maximum automation, an autonomy-first orchestrator is the better fit. Choose cli-crew if you want workers that cannot skip approvals, and a record of who changed what and how it was checked. The comparison reflects the oh-my-claudecode README and SECURITY.md as read on 2026-11-21.
 
 ## Handing off to another CLI
 
@@ -170,6 +186,8 @@ cli-crew is an early release (0.1.0). Windows installation, reinstallation, and 
 cd crew
 py -3 -m unittest discover -s tests
 ```
+
+GitHub Actions runs the same suite on Windows with Python 3.12 and 3.13 for every push to `main` and every pull request ([workflow](.github/workflows/test.yml)).
 
 | Document | Contents |
 | --- | --- |

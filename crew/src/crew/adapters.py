@@ -17,6 +17,29 @@ from crew.common import EXIT_USAGE, CrewError, read_text
 FORBIDDEN_FLAGS = ("--dangerously", "bypassPermissions", "--allow-all", "--yolo")
 AGY_MAX_CMDLINE_UTF16 = 30000
 
+# CLI versions these adapters were verified against (skill/cli-crew/references/adapters.md, SPEC 6).
+# Update together with that reference after re-verifying flags and output formats.
+VERIFIED_VERSIONS = {"codex": "0.171.0", "agy": "1.5.13", "claude": "2.1.329"}
+
+
+def version_number(text: str | None) -> str | None:
+    m = re.search(r"\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?", text or "")  # keep pre-release suffixes
+    return m.group(0) if m else None
+
+
+def version_warning(agent: str, text: str | None) -> str | None:
+    """A warning when an installed CLI is not the version the adapter was verified with."""
+    want = VERIFIED_VERSIONS.get(agent)
+    if text is None or want is None:
+        return None
+    found = version_number(text)
+    if found is None:
+        return f"{agent}: no version number in {text!r}; adapter verified with {want}"
+    if found != want:
+        return (f"{agent} {found} differs from the adapter-verified {want}; "
+                "flags or output formats may have changed, so check run results closely")
+    return None
+
 
 def binary_prefix(agent: str) -> list[str]:
     """Executable for an agent. CREW_BIN_<AGENT> (JSON list or path) overrides, for tests."""
