@@ -183,3 +183,5 @@ This project was built with AI assistance from Claude Code, Codex, and agy. They
 ## License
 
 Released under the [MIT License](LICENSE).
+
+cli-crew is an independent project and is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, or Google. Claude, Claude Code, Codex, and Antigravity are trademarks of their respective owners and are used here only to identify the tools cli-crew works with.

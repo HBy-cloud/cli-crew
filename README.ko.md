@@ -183,3 +183,5 @@ py -3 -m unittest discover -s tests
 ## 라이선스
 
 [MIT 라이선스](LICENSE)로 배포합니다.
+
+cli-crew는 독립 프로젝트이며 Anthropic, OpenAI, Google과 제휴하거나 그들의 보증·후원을 받지 않았습니다. Claude, Claude Code, Codex, Antigravity는 각 소유자의 상표이며, 여기서는 cli-crew가 연동하는 도구를 가리키는 용도로만 사용합니다.
