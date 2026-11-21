@@ -9,6 +9,8 @@ crew/tests/_work/
 # Local development records
 /handoffs/
 /docs/research/
+/docs/SPEC.md
+/docs/SPEC.en.md
 /docs/SPEC_DRAFT.md
 /docs/DEV_PLAN.md
 /docs/original-requirements.md

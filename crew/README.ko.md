@@ -4,7 +4,7 @@
 
 `crew`는 현재 AI CLI가 다른 CLI에 작업을 맡길 때 쓰는 Python 명령입니다. 워커를 실행하고 종료 상태, 파일 변경, 작업 결과를 기록합니다. 작업 분할과 결과 수락은 현재 AI가 담당합니다.
 
-[기술 명세](../docs/SPEC.md) · [스킬 지침](../skill/cli-crew/SKILL.md) · [Windows 설치](../README.ko.md)
+[워커 프로토콜](../skill/cli-crew/references/protocol.md) · [스킬 지침](../skill/cli-crew/SKILL.md) · [Windows 설치](../README.ko.md)
 
 ## 개발용 설치
 

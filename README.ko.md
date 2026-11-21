@@ -164,7 +164,7 @@ oh-my-claudecode 비교는 2026-11-21에 읽은 README와 SECURITY.md를 기준�
 crew handoff --agent codex --task csv-export --status "In progress" --lang ko
 ```
 
-이 명령은 `handoffs/` 아래에 날짜별 Markdown 초안을 만듭니다. 이미 `handoff/` 폴더를 쓰고 있다면 그 폴더에 만듭니다. 초안에는 선택한 실행 기록과 메인이 남긴 검증 내용이 들어갑니다. 남은 작업과 다음 단계를 채운 뒤, 다음 CLI에서 **같은 작업 폴더**를 열고 최신 인수인계 기록을 읽어 현재 Git 상태와 대조하라고 요청하세요. 지금은 인수인계를 수동으로 합니다. 메인 에이전트 자동 전환은 후속 과제입니다([명세 T-06](docs/SPEC.md)).
+이 명령은 `handoffs/` 아래에 날짜별 Markdown 초안을 만듭니다. 이미 `handoff/` 폴더를 쓰고 있다면 그 폴더에 만듭니다. 초안에는 선택한 실행 기록과 메인이 남긴 검증 내용이 들어갑니다. 남은 작업과 다음 단계를 채운 뒤, 다음 CLI에서 **같은 작업 폴더**를 열고 최신 인수인계 기록을 읽어 현재 Git 상태와 대조하라고 요청하세요. 지금은 인수인계를 수동으로 합니다. 메인 에이전트 자동 전환은 후속 과제입니다.
 
 ## 업데이트
 
@@ -214,8 +214,6 @@ GitHub Actions가 `main` 푸시와 모든 PR마다 Windows의 Python 3.12·3.13�
 | --- | --- |
 | [crew/README.ko.md](crew/README.ko.md) | CLI 명령 안내 |
 | [skill/cli-crew/SKILL.md](skill/cli-crew/SKILL.md) | 메인이 따르는 스킬 지침 |
-| [docs/SPEC.en.md](docs/SPEC.en.md) | 구조 개요 (영어) |
-| [docs/SPEC.md](docs/SPEC.md) | 전체 기술 명세 |
 
 이 프로젝트는 Claude Code, Codex, agy의 도움을 받아 개발했습니다. 명세 초안 작성, 구현, 교차 리뷰, 테스트, 문서 작성에 AI를 활용했습니다.
 

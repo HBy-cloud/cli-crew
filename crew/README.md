@@ -4,7 +4,7 @@
 
 Python CLI behind the `cli-crew` skill. It lets a main AI CLI delegate bounded tasks to worker CLIs
 (`codex`, `agy`, `claude`) in safe, non-interactive modes and records verifiable results.
-[Architecture overview](../docs/SPEC.en.md) · [Skill instructions](../skill/cli-crew/SKILL.md) · [Windows installation](../README.md)
+[Worker protocol](../skill/cli-crew/references/protocol.md) · [Skill instructions](../skill/cli-crew/SKILL.md) · [Windows installation](../README.md)
 
 ## Install (development)
 ```

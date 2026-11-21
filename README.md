@@ -164,7 +164,7 @@ Before ending a session, run this from the project. Replace `codex` and `csv-exp
 crew handoff --agent codex --task csv-export --status "In progress" --lang en
 ```
 
-This creates a dated Markdown draft under `handoffs/`, or under an existing `handoff/` directory. The draft includes the selected runs and the main agent's recorded verification. Complete the remaining work and next steps, then open the **same working copy** in the next CLI and ask it to read the latest handoff and compare it with the current Git state. Handoff is manual for now. Automatic main-agent switching is planned future work ([specification, T-06](docs/SPEC.md)).
+This creates a dated Markdown draft under `handoffs/`, or under an existing `handoff/` directory. The draft includes the selected runs and the main agent's recorded verification. Complete the remaining work and next steps, then open the **same working copy** in the next CLI and ask it to read the latest handoff and compare it with the current Git state. Handoff is manual for now. Automatic main-agent switching is planned future work.
 
 ## Updating
 
@@ -214,8 +214,6 @@ GitHub Actions runs the same suite on Windows with Python 3.12 and 3.13 for ever
 | --- | --- |
 | [crew/README.md](crew/README.md) | CLI command reference |
 | [skill/cli-crew/SKILL.md](skill/cli-crew/SKILL.md) | Instructions the main agent follows |
-| [docs/SPEC.en.md](docs/SPEC.en.md) | Architecture overview |
-| [docs/SPEC.md](docs/SPEC.md) | Full specification (Korean) |
 
 This project was built with AI assistance from Claude Code, Codex, and agy. They helped with specification drafting, implementation, cross-review, testing, and documentation.
 

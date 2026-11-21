@@ -1,6 +1,6 @@
 # cli-crew protocol reference
 
-Source of truth: `docs/SPEC.md` (v1.0) in the cli-crew repository. This is a condensed reference for the main agent.
+This reference describes the worker protocol for the main agent. Maintainer checkouts also have the detailed specification.
 
 ## Contract fields (frontmatter)
 | field | values | notes |
