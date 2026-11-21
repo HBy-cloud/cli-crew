@@ -13,6 +13,7 @@ Source of truth: `docs/SPEC.md` (v1.0) in the cli-crew repository. This is a con
 | allow_subagents | true/false | true only in read mode |
 | effort | codex: low..xhigh · agy: low..max · claude: low..max | high+ needs `--approve-cost` |
 | model | id or null | null = CLI default |
+| task_kind | investigate, implement, review, document, other, or null | Optional category for project-local routing history. Untagged runs are excluded. |
 | timeout_min | 1..120 | default 20 |
 | max_retries | 0 or 1 | retry only on transient errors, never after partial writes or usage limits |
 | retry_of | previous REJECTED task id | chain limited to two rejections |
@@ -21,6 +22,7 @@ Source of truth: `docs/SPEC.md` (v1.0) in the cli-crew repository. This is a con
 Body sections `## Objective` and `## Done when` are required.
 
 ## Statuses (first match wins)
+The final AGY result event can report an error even when the process exits 0. An explicit terminal failure takes precedence over a worker's success footer. A recovered step error on a successful terminal result does not by itself fail the run.
 1. CANCELLED · 2. TIMEOUT · 3. FAILED (exit≠0, error, usage limit, worker STATUS failed) ·
 4. BLOCKED (permission/denial signals from the CLI) · 5. FAILED (empty response) ·
 6. PARTIAL (worker STATUS partial, or RESULT block missing/invalid) ·
@@ -61,5 +63,7 @@ Delegating in a project whose instructions restrict it · sending sensitive proj
 `crew cancel --yes` · `crew clean --yes` · any commit/push/delete/deploy/external send.
 
 ## Files
+Use `crew compare <ID> <ID> [--json]` to inspect verification evidence, violations, worker time and measured usage for specific completed runs. Older archived runs can lack these fields.
+
 `.agent-runs/` (self-gitignored): contracts, state JSON, prompts, per-attempt logs/events/results,
 snapshots, subagent evidence, `history.jsonl` (permanent id registry), `locks/`.

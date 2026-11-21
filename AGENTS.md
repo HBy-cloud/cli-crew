@@ -14,11 +14,11 @@ The following private records may be present in a maintainer checkout:
 - `docs/research/` — experiment and review evidence. Do not edit past records.
 
 ## Language
-- Communicate with the user in Korean.
+- Communicate with the user in the user's language.
 - Write this file, code comments, and handoff records in English. `docs/SPEC.md` is in Korean.
 
 ## Rules
-1. Before work, read this file, `docs/SPEC.md`, the latest available handoff (if any) under `handoffs/` (latest date folder,
+1. Before work, read this file, `docs/SPEC.md`, the latest local handoff (if any) under `handoffs/` (latest date folder,
    then latest time), and check `git status`. Preserve existing changes.
 2. Stay within the requested scope. Do not invent requirements; ask the user when the spec is silent.
 3. Behaviour changes to `crew` or the skill must be reflected in `docs/SPEC.md`.
@@ -28,11 +28,12 @@ The following private records may be present in a maintainer checkout:
    (including `~/.claude`, `~/.codex`, `~/.gemini`, `~/.crew`) without an explicit request.
 6. Never read or print secrets (.env, keys, tokens). Real-CLI smoke tests must be read-only and use a
    throwaway project under `crew/tests/_work/` (git-ignored).
-7. `python` on this machine is a Store stub; use `py -3`. The tool is installed with
-   `uv tool install -e crew` (editable).
+7. On Windows, use `py -3`; `python` may resolve to the Microsoft Store stub. For development, install the tool
+   in editable mode with `uv tool install -e crew`.
 
 ## Handoffs
-- On finishing or stopping work, create `handoffs/YYYY-MM-DD/HHmm-<agent>-<task>.md` (Asia/Seoul, real clock
-  time; lowercase letters, digits, hyphens). Never edit existing handoffs.
+- Handoffs are local records; `handoffs/` is git-ignored and not published.
+- On finishing or stopping work, create `handoffs/YYYY-MM-DD/HHmm-<agent>-<task>.md` (real local clock time;
+  lowercase letters, digits, hyphens). Never edit existing handoffs.
 - Include: purpose and status (Done / In progress / Blocked), changed files, verification with results,
   unfinished items and next steps. Verified facts only; no secrets.

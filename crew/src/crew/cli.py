@@ -12,9 +12,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from crew import __version__, adapters, classify, contract as ct, runner, snapshot, state as st
+from crew import __version__, adapters, citations, classify, contract as ct, routing, runner, snapshot, state as st
 from crew.common import (
-    AGENTS, EXIT_DUP, EXIT_GUARD, EXIT_OK, EXIT_USAGE, KST, CrewError, atomic_write_text,
+    AGENTS, EXIT_DUP, EXIT_GUARD, EXIT_OK, EXIT_USAGE, KST, TASK_ID_RE, CrewError, atomic_write_text,
     home_dir, is_drive_root, load_config, now, now_iso, parse_iso, read_json, read_text, real, rel_to,
     same_path,
 )
@@ -162,7 +162,7 @@ def cmd_contract_new(a) -> int:
     path = runs.contracts / f"{a.task_id}.md"
     if path.exists() or a.task_id in runs.registry():
         raise CrewError(EXIT_DUP, f"task_id '{a.task_id}' already used")
-    atomic_write_text(path, ct.render_template(a.task_id, a.agent, a.mode, a.write or []))
+    atomic_write_text(path, ct.render_template(a.task_id, a.agent, a.mode, a.write or [], a.kind))
     print(str(path))
     return EXIT_OK
 
@@ -252,7 +252,7 @@ def cmd_run(a) -> int:
 
 def cmd_cancel(a) -> int:
     root, runs = _root_and_runs()
-    code, msg = runner.cancel(root, runs, a.task_id, a.yes)
+    code, msg = runner.cancel(root, runs, a.task_id, a.yes, a.target)
     print(msg)
     return code
 
@@ -262,10 +262,28 @@ def cmd_cancel(a) -> int:
 def _display_status(s: dict[str, Any]) -> str:
     from crew import procutil
     status = s.get("status")
-    if status == "RUNNING" and not procutil.pid_alive(s.get("crew_pid")):
+    if status == "RUNNING" and not procutil.same_process(s.get("crew_pid"), s.get("crew_create_time")):
         alive = procutil.same_process(s.get("worker_pid"), s.get("worker_create_time"))
         return "ORPHANED?" if alive else "STALE?"
     return status
+
+
+def cmd_routing(a) -> int:
+    _, runs = _root_and_runs()
+    rows = routing.recent(runs, a.kind, a.mode)
+    lines = [f"{a.kind}/{a.mode}: {len(rows)} recent comparable worker runs (up to 10)"]
+    for row in rows:
+        model = row.get("model_actual")
+        if not model:
+            requested = row.get("model_requested")
+            model = f"{requested} (requested)" if requested else "default (unknown)"
+        lines.append(f"{row['task_id']} {row['agent']}/{model}/{row['effort']} "
+                     f"{row['status']} {row['verdict'] or 'unjudged'} "
+                     f"verification_recorded={row['verification_recorded']} override={row['override']} "
+                     f"attempts={row['attempts_count']} retry_of={row['retry_of'] or '-'} "
+                     f"seconds={row['duration_s']} tokens={row['tokens']} usd={row['cost_usd']}")
+    emit(rows, a.json, lines)
+    return EXIT_OK
 
 
 def cmd_status(a) -> int:
@@ -286,7 +304,45 @@ def cmd_status(a) -> int:
     return EXIT_OK
 
 
+def cmd_compare(a) -> int:
+    _, runs = _root_and_runs()
+    rows = []
+    archived = {r["task_id"]: r for r in runs.iter_history() if r.get("task_id") in a.task_ids}
+    scopes = {"codex": "input+output", "claude": "input+output+cache creation+cache reads"}
+    lines = []
+    for tid in a.task_ids:
+        if not re.fullmatch(TASK_ID_RE, tid):
+            raise CrewError(EXIT_USAGE, f"invalid task id: {tid}")
+        state = runs.load_state(tid)
+        if state and state.get("status") in st.ACTIVE_STATES:
+            raise CrewError(EXIT_GUARD, f"{tid} is still active")
+        row = routing.comparison_sample(state) if state else archived.get(tid)
+        if row is None:
+            raise CrewError(EXIT_USAGE, f"unknown task: {tid}")
+        row = dict(row)
+        for field in ("main_verification", "boundary_violation_count", "boundary_check", "subagent_violation",
+                      "tokens", "cost_usd", "duration_s"):
+            row.setdefault(field, None)
+        row["token_scope"] = scopes.get(row.get("agent"), "unmeasured")
+        rows.append(row)
+        model = row.get("model_actual") or row.get("model_requested") or "unknown model"
+        cost = row["cost_usd"] if row["cost_usd"] is not None else "unmeasured"
+        tokens = row["tokens"] if row["tokens"] is not None else "unmeasured"
+        violations = row["boundary_violation_count"]
+        lines.extend([
+            f"{tid} | {row.get('agent')}/{model}/{row.get('effort')} | {row.get('status')} | {row.get('verdict') or 'unjudged'}",
+            f"  worker seconds={row['duration_s']} tokens={tokens} ({row['token_scope']}) usd={cost}",
+            f"  boundary violations={violations if violations is not None else 'unknown'} "
+            f"subagent violation={row['subagent_violation']} {row['boundary_check'] or ''}".rstrip(),
+            f"  verification: {row['main_verification'] or 'no text recorded'}",
+        ])
+    emit(rows, a.json, lines)
+    return EXIT_OK
+
+
 def _require_state(runs: st.Runs, tid: str) -> dict[str, Any]:
+    if not re.fullmatch(TASK_ID_RE, tid):
+        raise CrewError(EXIT_USAGE, f"invalid task id: {tid}")
     s = runs.load_state(tid)
     if not s:
         raise CrewError(EXIT_USAGE, f"unknown task: {tid}")
@@ -333,7 +389,12 @@ def cmd_check(a) -> int:
         lines.append(f"  boundary violations: {bv if isinstance(bv, str) else len(bv)}")
         emit(r, a.json, lines)
         return EXIT_OK
-    emit(s, a.json, summarize(s, runs) + [f"verdict: {s.get('verdict')}"])
+    lines = summarize(s, runs) + [f"verdict: {s.get('verdict')}"]
+    if s.get("mode") == "read":
+        missing = citations.unverified(root, _result_text(runs, s, True))
+        s = {**s, "unverified_citations": missing}
+        lines.extend(f"unverified citation: {ref}" for ref in missing)
+    emit(s, a.json, lines)
     return EXIT_OK
 
 
@@ -347,6 +408,12 @@ def cmd_result(a) -> int:
 def _result_text(runs, s, raw):
     att = (s.get("attempts") or [{}])[-1]
     path = runs.file(att.get("result") or "__none__")
+    if raw and s.get("agent") == "agy" and att.get("events"):
+        parsed = adapters.parse("agy", runs.file(att["events"]), runs.file(att.get("log") or "__none__"), path)
+        if parsed.transcript and parsed.transcript != parsed.final_text:
+            return "[AGY response transcript; may include intermediate responses]\n" + parsed.transcript
+        if parsed.final_text:
+            return parsed.final_text
     if not path.exists():
         return f"(no worker response was saved for {s['task_id']}; status {s.get('status')})"
     text = read_text(path)
@@ -539,9 +606,7 @@ def cmd_clean(a) -> int:
                     report["agy_report"].append({"task": tid, "path": p, "bytes": size})
         if do_runs:
             names = s.get("files") or []
-            entry = {"task_id": tid, "agent": s.get("agent"), "mode": s.get("mode"), "status": s.get("status"),
-                     "verdict": s.get("verdict"), "retry_of": s.get("retry_of"), "started": s.get("started"),
-                     "ended": s.get("ended"), "cleaned_at": now_iso()}
+            entry = {**routing.comparison_sample(s), "started": s.get("started"), "cleaned_at": now_iso()}
             report["runs"].append({"task": tid, "files": names})
             if a.yes:
                 try:
@@ -597,6 +662,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--agent", choices=AGENTS)
     sp.add_argument("--mode", choices=("read", "write"), default="read")
     sp.add_argument("--write", nargs="*")
+    sp.add_argument("--kind", choices=ct.TASK_KINDS)
     sp.set_defaults(func=cmd_contract_new)
     sp = csub.add_parser("check")
     sp.add_argument("file")
@@ -620,6 +686,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--with-result", action="store_true", help="include the saved worker result in the run output")
     add_json(sp)
     sp.set_defaults(func=cmd_run)
+
+    sp = sub.add_parser("routing", help="show recent outcomes for a similar kind of worker task")
+    sp.add_argument("--kind", choices=ct.TASK_KINDS, required=True)
+    sp.add_argument("--mode", choices=("read", "write"), required=True)
+    add_json(sp)
+    sp.set_defaults(func=cmd_routing)
+
+    sp = sub.add_parser("compare", help="compare completed worker runs by task ID")
+    sp.add_argument("task_ids", nargs="+")
+    add_json(sp)
+    sp.set_defaults(func=cmd_compare)
 
     sp = sub.add_parser("status")
     sp.add_argument("--all", action="store_true")
@@ -668,6 +745,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("cancel")
     sp.add_argument("task_id")
+    sp.add_argument("--target", help="worker identity printed by the cancellation preview")
     sp.add_argument("--yes", action="store_true")
     sp.set_defaults(func=cmd_cancel)
     return p

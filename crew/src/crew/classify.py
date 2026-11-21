@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from crew.adapters import Parsed
+if TYPE_CHECKING:
+    from crew.adapters import Parsed
 
 WORKER_STATUSES = {"success", "partial", "failed", "blocked"}
 
@@ -31,12 +32,18 @@ def _any(patterns: list[str], lines: list[str]) -> bool:
     return any(re.search(p, text, re.I) for p in patterns)
 
 
+def last_result_block(text: str) -> str | None:
+    last = None
+    for heading in re.finditer(r"(?m)^## RESULT[ \t]*\r?$", text):
+        last = heading.start()
+    return text[last:].strip() if last is not None else None
+
+
 def parse_result_block(text: str) -> dict[str, Any]:
     """Last '## RESULT' block (header included) and its fields."""
-    idx = text.rfind("## RESULT")
-    if idx < 0:
+    block = last_result_block(text)
+    if block is None:
         return {"block": None, "status": None, "fields": {}}
-    block = text[idx:].strip()
     fields: dict[str, str] = {}
     key = None
     for line in block.splitlines()[1:]:
@@ -47,7 +54,6 @@ def parse_result_block(text: str) -> dict[str, Any]:
         elif key:
             fields[key] += "\n" + line
     status = (fields.get("STATUS") or "").strip().lower()
-    status = re.split(r"[\s|,]", status)[0] if status else ""
     return {"block": block, "status": status if status in WORKER_STATUSES else None, "fields": fields}
 
 

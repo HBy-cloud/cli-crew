@@ -14,7 +14,10 @@ from crew.common import (
 )
 from crew.state import Runs, retry_of_problem
 
+TASK_KINDS = ("investigate", "implement", "review", "document", "other")
+
 FIELDS: dict[str, Any] = {
+    "task_kind": None,
     "task_id": None,
     "agent": None,
     "mode": None,
@@ -45,6 +48,7 @@ TEMPLATE = """---
 task_id: {task_id}
 agent: {agent}
 mode: {mode}
+task_kind: {task_kind}
 write_paths: {write_paths}
 add_dirs: []
 allow_subagents: false
@@ -188,9 +192,10 @@ def load(path: str | os.PathLike) -> Contract:
     return Contract(path=p, fields=fields, body=body, sections=parse_sections(body), unknown=unknown)
 
 
-def render_template(task_id: str, agent: str | None, mode: str, write_paths: list[str]) -> str:
+def render_template(task_id: str, agent: str | None, mode: str, write_paths: list[str], task_kind: str | None = None) -> str:
     wp = "[" + ", ".join(write_paths) + "]" if write_paths else "[]"
-    return TEMPLATE.format(task_id=task_id, agent=agent or "null", mode=mode, write_paths=wp)
+    return TEMPLATE.format(task_id=task_id, agent=agent or "null", mode=mode, write_paths=wp,
+                           task_kind=task_kind or "null")
 
 
 # ------------------------------------------------------------ merge + validate
@@ -243,6 +248,8 @@ def validate(c: Contract, s: dict[str, Any], root: Path, runs: Runs, cfg: dict[s
         errors.append(f"agent must be one of {AGENTS}")
 
     mode = s.get("mode")
+    if s.get("task_kind") is not None and s["task_kind"] not in TASK_KINDS:
+        errors.append(f"task_kind must be one of {TASK_KINDS} or null")
     if mode not in ("read", "write"):
         errors.append("mode must be 'read' or 'write'")
 

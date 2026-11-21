@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from crew.classify import last_result_block
 from crew.common import EXIT_USAGE, CrewError, read_text
 
 FORBIDDEN_FLAGS = ("--dangerously", "bypassPermissions", "--allow-all", "--yolo")
@@ -124,10 +125,12 @@ def build(agent: str, s: dict[str, Any], *, root: Path, add_dirs: list[Path], pr
 @dataclass
 class Parsed:
     final_text: str = ""
+    transcript: str = ""
     diag: list[str] = field(default_factory=list)  # diagnostic-channel lines
     session_ref: str | None = None
     model_actual: str | None = None
     cost_usd: float | None = None
+    tokens: int | None = None
     is_error: bool = False
     permission_denials: list[Any] = field(default_factory=list)
     print_timeout: bool = False
@@ -137,6 +140,15 @@ class Parsed:
 
 
 AGY_DIAG_PREFIX = re.compile(r"^\s*(jetski:|\[agy\]|AGY_ERROR|error:)", re.I)
+
+
+def _token_sum(usage: Any, fields: tuple[str, ...]) -> int | None:
+    if not isinstance(usage, dict):
+        return None
+    counts = [usage.get(k) for k in fields]
+    if any(type(n) is not int or n < 0 for n in counts):
+        return None
+    return sum(counts)
 
 
 def _jsonl(text: str) -> tuple[list[dict[str, Any]], list[str]]:
@@ -165,6 +177,12 @@ def parse(agent: str, stdout_path: Path, stderr_path: Path, result_path: Path) -
         objs, other = _jsonl(out)
         p.events = objs
         p.diag.extend(other)
+        completed = [o for o in objs if o.get("type") == "turn.completed"]
+        totals = [_token_sum(o.get("usage"), ("input_tokens", "output_tokens")) for o in completed]
+        started = sum(o.get("type") == "turn.started" for o in objs)
+        if (totals and None not in totals and started <= len(completed)
+                and not any(o.get("type") == "turn.failed" for o in objs)):
+            p.tokens = sum(totals)
         for o in objs:
             t = o.get("type")
             if t == "thread.started":
@@ -184,6 +202,7 @@ def parse(agent: str, stdout_path: Path, stderr_path: Path, result_path: Path) -
         p.diag.extend(other)  # non-JSON lines are CLI messages (jetski:, [agy], ...)
         steps: dict[int, list[str]] = {}
         result_obj: dict[str, Any] | None = None
+        step_errors = []
         subagent_used = False
         for o in objs:
             ev = o.get("event")
@@ -193,7 +212,7 @@ def parse(agent: str, stdout_path: Path, stderr_path: Path, result_path: Path) -
             elif ev == "step_update":
                 su = o.get("step_update") or {}
                 if su.get("state") == "ERROR" or su.get("error"):
-                    p.diag.append(json.dumps(su.get("error") or su, ensure_ascii=False)[:2000])
+                    step_errors.append(json.dumps(su.get("error") or su, ensure_ascii=False)[:2000])
                 if su.get("step_type") == "subagent" or su.get("tool_name") == "invoke_subagent":
                     subagent_used = True
                     for sub in (su.get("subagent_info") or {}).get("subagents") or []:
@@ -210,15 +229,27 @@ def parse(agent: str, stdout_path: Path, stderr_path: Path, result_path: Path) -
             if result_obj.get("finished_reason") == "print_timeout":
                 p.print_timeout = True
             if result_obj.get("status") not in (None, "SUCCESS"):
+                p.is_error = True
                 p.diag.append(f"agy result status={result_obj.get('status')} error={result_obj.get('error')}")
             elif result_obj.get("error"):
+                p.is_error = True
                 p.diag.append(f"agy error={result_obj.get('error')}")
-        if steps:
-            p.final_text = "".join(steps[max(steps)])
-        if "## RESULT" not in p.final_text and result_obj and result_obj.get("response"):
-            resp = result_obj["response"]
-            idx = resp.rfind("## RESULT")
-            p.final_text = resp[idx:] if idx >= 0 else (p.final_text or resp)
+        if not result_obj or result_obj.get("status") != "SUCCESS" or p.is_error:
+            p.diag.extend(step_errors)
+        messages = ["".join(steps[i]) for i in sorted(steps)]
+        if messages:
+            p.final_text = messages[-1]
+        response = (result_obj or {}).get("response") or ""
+        if response and all(message in response for message in messages):
+            p.transcript = response
+        else:
+            p.transcript = "\n\n".join(messages)
+            if response and response not in p.transcript:
+                p.transcript += "\n\n[Terminal response]\n" + response
+        # A footer from an earlier streamed response cannot complete the last response.
+        older_footer = any(last_result_block(message) for message in messages[:-1])
+        if response and not older_footer and not last_result_block(p.final_text):
+            p.final_text = last_result_block(response) or p.final_text or response
         if not objs and out.strip():
             # text-mode style output (e.g. 'jetski: no output produced ...')
             for line in out.splitlines():
@@ -240,6 +271,8 @@ def parse(agent: str, stdout_path: Path, stderr_path: Path, result_path: Path) -
             p.permission_denials = data.get("permission_denials") or []
             p.session_ref = data.get("session_id")
             p.cost_usd = data.get("total_cost_usd")
+            p.tokens = _token_sum(data.get("usage"), ("input_tokens", "output_tokens",
+                                                      "cache_creation_input_tokens", "cache_read_input_tokens"))
             mu = data.get("modelUsage") or {}
             if mu:
                 p.model_actual = ",".join(mu.keys())

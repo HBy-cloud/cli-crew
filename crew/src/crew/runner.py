@@ -133,12 +133,18 @@ def _subagent_evidence(agent: str, parsed: adapters.Parsed, started_epoch: float
     return ev
 
 
-def _wait(proc: subprocess.Popen, hard_timeout_s: float) -> tuple[int | None, bool]:
+def _wait(proc: subprocess.Popen, hard_timeout_s: float, cancel_request: Path,
+          started: float | None) -> tuple[int | None, bool]:
     deadline = time.monotonic() + hard_timeout_s
     while True:
         rc = proc.poll()
         if rc is not None:
             return rc, False
+        if cancel_request.is_file():
+            identity = read_text(cancel_request)
+            if identity == f"{proc.pid}:{started}" and procutil.stop_verified_tree(proc.pid, started):
+                raise Cancelled()
+            cancel_request.unlink(missing_ok=True)
         if time.monotonic() >= deadline:
             procutil.kill_tree(proc.pid)
             try:
@@ -177,6 +183,7 @@ def _record_cancelled_attempt(runs: st.Runs, state: dict[str, Any], pending: dic
     _add_file(state, f["subagents"].name)
     attempt.update({
         "ended": now_iso(), "exit_code": proc.returncode, "status": "CANCELLED",
+        "tokens": parsed.tokens, "cost_usd": parsed.cost_usd,
         "failure_reason": "cancelled", "worker_status": None, "session_ref": parsed.session_ref,
         "subagent_used": ev["used"], "session_paths": ev["session_paths"], "log": f["log"].name,
         "events": f["events"].name, "result": f["result"].name, "subagents": f["subagents"].name,
@@ -190,11 +197,12 @@ def _record_cancelled_attempt(runs: st.Runs, state: dict[str, Any], pending: dic
 
 
 def finalize(runs: st.Runs, state: dict[str, Any], *, root: Path, write_paths_abs: list[Path],
-             cancelled: bool, quick: bool = False, error: str | None = None) -> None:
+             cancelled: bool, quick: bool = False, error: str | None = None, worker_stopped: bool = False) -> None:
     """Common finalization path (SPEC 4.4-8). `quick` skips checks (second Ctrl+C)."""
     tid = state["task_id"]
     wpid = state.get("worker_pid")
-    if wpid and procutil.same_process(wpid, state.get("worker_create_time")):
+    if (not worker_stopped and state.get("worker_create_time") is not None
+            and procutil.same_process(wpid, state["worker_create_time"])):
         procutil.kill_tree(wpid)
     if not quick:
         try:
@@ -297,12 +305,13 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
     started = now_iso()
     state: dict[str, Any] = {
         "task_id": tid, "status": "RUNNING", "agent": s["agent"], "cli_version": version,
-        "mode": s["mode"], "effort": s["effort"], "model_requested": s.get("model"),
+        "mode": s["mode"], "task_kind": s.get("task_kind"), "effort": s["effort"], "model_requested": s.get("model"),
         "model_resolved": s.get("model_resolved"), "model_actual": None,
         "cwd": str(root), "add_dirs": [str(p) for p in chk.add_dirs_abs], "write_paths": s["write_paths"],
         "allow_subagents": s["allow_subagents"], "ephemeral": s["ephemeral"],
         "timeout_min": s["timeout_min"], "max_retries": s["max_retries"], "retry_of": s.get("retry_of"),
-        "crew_pid": os.getpid(), "worker_pid": None, "worker_create_time": None,
+        "crew_pid": os.getpid(), "crew_create_time": procutil.create_time(os.getpid()),
+        "worker_pid": None, "worker_create_time": None,
         "started": started, "started_epoch": time.time(), "ended": None, "duration_s": None,
         "attempts": [], "worker_status": None, "failure_reason": None,
         "boundary_violations": [], "concurrent_tasks": [], "subagent_used": None,
@@ -381,6 +390,9 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
                                           stdout_path=str(f["events"]), stderr_path=str(f["log"]))
                     ct = procutil.create_time(proc.pid)
                     state["worker_pid"], state["worker_create_time"] = proc.pid, ct
+                    cancel_request = runs.file(f"{tid}.a{n}.cancel")
+                    state["cancel_request"] = cancel_request.name
+                    _add_file(state, cancel_request.name)
                     attempt["worker_pid"], attempt["worker_create_time"] = proc.pid, ct
                     pending.update(proc=proc, attempt=attempt, f=f, a_started=a_started)
                     st.update_active_worker(runs, tid, proc.pid, ct)
@@ -388,7 +400,7 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
                 hard_s = s["timeout_min"] * 60 + HARD_TIMEOUT_GRACE_S
                 if os.environ.get("CREW_TEST_HARD_TIMEOUT_S"):  # test hook: can only shorten
                     hard_s = min(hard_s, float(os.environ["CREW_TEST_HARD_TIMEOUT_S"]))
-                rc, timed_out = _wait(proc, hard_s)
+                rc, timed_out = _wait(proc, hard_s, cancel_request, ct)
                 parsed = adapters.parse(s["agent"], f["events"], f["log"], f["result"])
                 if s["agent"] in ("agy", "claude") and parsed.final_text and not f["result"].exists():
                     atomic_write_text(f["result"], parsed.final_text)
@@ -398,6 +410,7 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
                 _add_file(state, f["subagents"].name)
                 attempt.update({
                     "ended": now_iso(), "exit_code": rc, "status": status, "failure_reason": reason,
+                    "tokens": parsed.tokens, "cost_usd": parsed.cost_usd,
                     "worker_status": ws, "session_ref": parsed.session_ref, "subagent_used": ev["used"],
                     "session_paths": ev["session_paths"], "log": f["log"].name, "events": f["events"].name,
                     "result": f["result"].name, "subagents": f["subagents"].name,
@@ -412,7 +425,7 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
                 # retry decision (SPEC 4.4-7-4)
                 if n < max_attempts and status == "FAILED" and reason == "transient" and ev["used"] is not True:
                     tmp_after = snapshot.take(root)
-                    if not snapshot.diff(before, tmp_after, root):
+                    if before.get("mode") == tmp_after.get("mode") and not snapshot.diff(before, tmp_after, root):
                         continue
                 break
             finalize(runs, state, root=root, write_paths_abs=chk.write_paths_abs, cancelled=False)
@@ -450,21 +463,44 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
     return state
 
 
-def cancel(root: Path, runs: st.Runs, task_id: str, yes: bool) -> tuple[int, str]:
+def cancel(root: Path, runs: st.Runs, task_id: str, yes: bool, target: str | None = None) -> tuple[int, str]:
     state = runs.load_state(task_id)
     if not state:
         return EXIT_USAGE, f"unknown task: {task_id}"
     if state.get("status") not in ("RUNNING", "ORPHANED"):
         return EXIT_GUARD, f"{task_id} is {state.get('status')}; nothing to cancel"
     wpid = state.get("worker_pid")
-    alive = procutil.same_process(wpid, state.get("worker_create_time"))
-    crew_alive = procutil.pid_alive(state.get("crew_pid")) and state.get("crew_pid") != os.getpid()
-    plan = (f"{task_id}: worker pid {wpid} alive={alive}, crew pid {state.get('crew_pid')} alive={crew_alive}. "
-            "Will kill the worker tree (pid+creation time verified) and finalize as CANCELLED.")
+    started = state.get("worker_create_time")
+    if not wpid or started is None or not procutil.same_process(wpid, started):
+        return EXIT_GUARD, f"{task_id}: cannot verify worker identity; no cancellation requested"
+    identity = f"{wpid}:{started}"
+    if target is not None and identity != target:
+        return EXIT_GUARD, f"{task_id}: worker changed; preview cancellation again"
+    plan = f"{task_id}: stop worker tree rooted at PID {wpid} (creation time {started})."
     if not yes:
-        return EXIT_OK, "[dry-run] " + plan + " Re-run with --yes."
-    if crew_alive:
-        procutil.kill_tree(state.get("crew_pid"))
-    wp_abs = [root / p for p in state.get("write_paths", [])]
-    finalize(runs, state, root=root, write_paths_abs=wp_abs, cancelled=True)
+        return EXIT_OK, f"[dry-run] {plan} Confirm with crew cancel {task_id} --target {identity} --yes"
+    if state["status"] == "RUNNING" and procutil.same_process(state.get("crew_pid"), state.get("crew_create_time")):
+        request = state.get("cancel_request")
+        if not request:
+            return EXIT_GUARD, f"{task_id}: older controller; cancel in its running terminal"
+        # The owning controller holds the worker handle and records the interrupted attempt.
+        # A request for an earlier attempt cannot cancel its replacement.
+        atomic_write_text(runs.file(request), identity)
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            latest = runs.load_state(task_id) or {}
+            if latest.get("status") == "CANCELLED":
+                return EXIT_OK, f"{task_id} cancelled"
+            if latest.get("status") != "RUNNING" or latest.get("cancel_request") != request:
+                break
+            time.sleep(0.1)
+        return EXIT_GUARD, f"{task_id}: cancellation not confirmed; check task status"
+    # Keep stale recovery from releasing the slot between stopping the orphan and its final snapshot.
+    with st.ReserveLock(runs):
+        latest = runs.load_state(task_id) or {}
+        if (latest.get("status") not in st.ACTIVE_STATES or latest.get("worker_pid") != wpid
+                or latest.get("worker_create_time") != started or not procutil.stop_verified_tree(wpid, started)):
+            return EXIT_GUARD, f"{task_id}: worker termination not confirmed; check task status"
+        wp_abs = [root / p for p in latest.get("write_paths", [])]
+        finalize(runs, latest, root=root, write_paths_abs=wp_abs, cancelled=True, worker_stopped=True)
     return EXIT_OK, f"{task_id} cancelled"

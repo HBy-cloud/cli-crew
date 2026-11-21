@@ -14,12 +14,13 @@ crew --version
 
 ## Initialize project guidance
 
-Run `crew init` from the target project. It creates a starter `AGENTS.md` only when the root has no supported instruction file. The skill adds verified project details on first use.
+Run `crew init` from the target project. It creates a starter `AGENTS.md` only when the root has no supported instruction file. When setup is requested through the skill, main adds verified project details.
 
 ## Typical flow (run inside a project)
 ```
 crew detect --paths src/
-crew contract new T-01 --agent codex --mode read
+crew routing --kind review --mode read
+crew contract new T-01 --agent codex --kind review --mode read
 # edit .agent-runs/contracts/T-01.md
 crew run --contract .agent-runs/contracts/T-01.md --with-result
 # inspect status, boundaries and RESULT; verify the evidence before acceptance
@@ -41,7 +42,9 @@ Run commands from the target project. Replace uppercase placeholders with your v
 | --- | --- |
 | `crew init` | Create missing project instructions; reuse existing guides. |
 | `crew detect [--paths PATH ...] [--json]` | List available workers, applicable instructions and active runs. |
-| `crew contract new ID [--agent CLI] [--mode MODE] [--write PATH ...]` | Create the contract template. Fill in the objective, context and completion criteria before running. |
+| `crew contract new ID [--agent CLI] [--mode MODE] [--kind KIND] [--write PATH ...]` | Create the contract template. Fill in the objective, context and completion criteria before running. |
+| `crew routing --kind KIND --mode MODE [--json]` | Show up to ten recent completed worker runs with matching mode and kind (investigate, implement, review, document, other). |
+| `crew compare ID... [--json]` | Compare verification evidence, violations, worker time and provider-specific usage for completed runs. |
 | `crew contract check FILE [--agent CLI] [--effort LEVEL] [--model MODEL] [--json]` | Validate a contract without starting a worker. |
 | `crew run --contract FILE [--agent CLI] [--effort LEVEL] [--model MODEL] [--timeout MIN] [--with-result] [--json] [--approve-cost] [--approve-data-sharing]` | Start the worker and wait for its result. Timeout is in minutes. The legacy --allow-unbounded-write flag cannot enable agy writes. |
 | `crew status [--all] [--json]` | Show current and recent task states; use --all for older tasks. |
@@ -49,7 +52,7 @@ Run commands from the target project. Replace uppercase placeholders with your v
 | `crew check ID [--recheck] [--json]` | Inspect the run checks. Recheck uses saved evidence. |
 | `crew accept ID [--verified TEXT] [--override --reason TEXT]` | Record acceptance. Supply actual verification for a partial or unverified result. |
 | `crew reject ID --reason TEXT` | Reject the result and record why. |
-| `crew cancel ID [--yes]` | Preview cancellation; --yes performs it. |
+| `crew cancel ID [--target IDENTITY] [--yes]` | Preview the worker tree. After approval, use the printed confirmation command to stop that worker. |
 | `crew handoff --agent NAME --task SLUG --status STATUS [--since ISO_OR_LAST] [--tasks ID,ID] [--lang LANG]` | Draft a handoff for the next session. Use en or ko; status is Done, "In progress", or Blocked. |
 | `crew clean [--sessions] [--runs] [--older-than DAYS] [--yes] [--json]` | Preview cleanup of eligible records. The age threshold defaults to 7 days; --yes applies the plan. |
 

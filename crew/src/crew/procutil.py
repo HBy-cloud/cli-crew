@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -17,6 +18,7 @@ if IS_WINDOWS:
 
     _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
     _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    _SYNCHRONIZE = 0x00100000
     _STILL_ACTIVE = 259
 
     _k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
@@ -27,6 +29,8 @@ if IS_WINDOWS:
     _k32.GetProcessTimes.restype = wintypes.BOOL
     _k32.CloseHandle.argtypes = [wintypes.HANDLE]
     _k32.CloseHandle.restype = wintypes.BOOL
+    _k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    _k32.WaitForSingleObject.restype = wintypes.DWORD
 
 
 def pid_alive(pid: int | None) -> bool:
@@ -49,6 +53,14 @@ def pid_alive(pid: int | None) -> bool:
         return False
     except PermissionError:
         return True
+    if sys.platform.startswith("linux"):
+        try:
+            with open(f"/proc/{pid}/stat", encoding="ascii") as info:
+                return info.read().rsplit(")", 1)[1].split()[0] != "Z"
+        except FileNotFoundError:
+            return False
+        except (OSError, IndexError):
+            pass
     return True
 
 
@@ -100,6 +112,27 @@ def kill_tree(pid: int | None) -> None:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+
+def stop_verified_tree(pid: int, started: float | None) -> bool:
+    """Stop the recorded worker tree. Pin the Windows PID until termination is confirmed."""
+    with ExitStack() as stack:
+        if IS_WINDOWS:
+            handle = _k32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION | _SYNCHRONIZE, False, pid)
+            if not handle:
+                return False
+            stack.callback(_k32.CloseHandle, handle)
+        if started is None or not same_process(pid, started):
+            return False
+        kill_tree(pid)
+        if IS_WINDOWS:
+            return _k32.WaitForSingleObject(handle, 5000) == 0
+        deadline = time.monotonic() + 5
+        while same_process(pid, started):
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.05)
+        return True
 
 
 def spawn(args: list[str], *, cwd: str, env: dict[str, str], stdin_path: Path | None,

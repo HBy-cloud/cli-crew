@@ -17,7 +17,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "src"))
 
 from crew import classify, cli, snapshot, state as st  # noqa: E402
-from crew.adapters import Parsed, build  # noqa: E402
+from crew.adapters import Parsed, build, parse  # noqa: E402
 from crew.common import CrewError  # noqa: E402
 from crew.subagents import verify_codex_rollout_for_delete  # noqa: E402
 
@@ -115,6 +115,57 @@ class Base(unittest.TestCase):
 
 
 # ------------------------------------------------------------ contract
+
+class RoutingTests(Base):
+    def test_provider_usage_is_measured_only_for_complete_reports(self):
+        events = self.root / "events"
+        missing = self.root / "missing"
+        events.write_text(json.dumps({"usage": {"input_tokens": 2, "output_tokens": 3,
+                                                "cache_creation_input_tokens": 5, "cache_read_input_tokens": 7}}),
+                          encoding="utf-8")
+        self.assertEqual(parse("claude", events, missing, missing).tokens, 17)
+        events.write_text('{"type":"turn.started"}\n'
+                          '{"type":"turn.completed","usage":{"input_tokens":0,"output_tokens":0}}\n',
+                          encoding="utf-8")
+        self.assertEqual(parse("codex", events, missing, missing).tokens, 0)
+        with events.open("a", encoding="utf-8") as f:
+            f.write('{"type":"turn.started"}\n')
+        self.assertIsNone(parse("codex", events, missing, missing).tokens)
+
+    def test_measured_worker_through_archive(self):
+        args = ("routing", "--kind", "review", "--mode", "read", "--json")
+        self.assertEqual(json.loads(crew(*args)[1]), [])
+        self.assertFalse(self.runs.dir.exists())
+        self.assertEqual(crew("contract", "new", "T-review", "--agent", "codex", "--kind", "review")[0], 0)
+        path = self.runs.contracts / "T-review.md"
+        path.write_text(path.read_text(encoding="utf-8").replace("TODO:", "Test:"), encoding="utf-8")
+        os.environ["FAKE_SCENARIO"] = "measured"
+        code, _, err = crew("run", "--contract", str(path))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(crew("accept", "T-review", "--verified", "checked evidence")[0], 0)
+        row, = json.loads(crew(*args)[1])
+        self.assertEqual((row["tokens"], row["attempts_count"], row["verdict"]), (100, 1, "ACCEPTED"))
+        self.assertTrue(row["verification_recorded"])
+        self.assertIsNone(row["cost_usd"])
+        self.assertEqual(crew("clean", "--runs", "--older-than", "0", "--yes")[0], 0)
+        self.assertFalse(self.runs.state_path("T-review").exists())
+        archived, = json.loads(crew(*args)[1])
+        self.assertEqual({k: archived[k] for k in row}, row)
+        self.assertEqual(json.loads(crew("routing", "--kind", "implement", "--mode", "write", "--json")[1]), [])
+
+    def test_partial_measurements_and_prior_records(self):
+        self.runs.ensure()
+        self.runs.append_history({"task_id": "legacy", "mode": "read", "status": "DONE"})
+        state = {"task_id": "retry", "task_kind": "review", "mode": "read", "ended": "2026-11-21",
+                 "agent": "agy", "status": "FAILED", "verdict": "REJECTED", "retry_of": "first",
+                 "attempts": [{"tokens": 0, "cost_usd": 0.01}, {}]}
+        self.runs.save_state(state)
+        self.runs.append_history(dict(state, verdict="ACCEPTED"))
+        row, = json.loads(crew("routing", "--kind", "review", "--mode", "read", "--json")[1])
+        self.assertEqual((row["verdict"], row["attempts_count"], row["retry_of"]), ("REJECTED", 2, "first"))
+        self.assertIsNone(row["tokens"])
+        self.assertIsNone(row["cost_usd"])
+
 
 class InitTests(Base):
     def test_init_creates_once_then_preserves_user_edits(self):

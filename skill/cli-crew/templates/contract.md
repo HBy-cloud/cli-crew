@@ -2,6 +2,7 @@
 task_id: T-EXAMPLE
 agent: codex
 mode: read
+task_kind: investigate
 write_paths: []
 add_dirs: []
 allow_subagents: false

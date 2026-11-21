@@ -88,6 +88,8 @@ for line in stderr_lines:
 
 if agent == "codex":
     print(json.dumps({"type": "thread.started", "thread_id": "fake-thread-1"}))
+    if scenario == "measured":
+        print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 80, "output_tokens": 20}}))
     if "-o" in args and text:
         Path(args[args.index("-o") + 1]).write_text(text, encoding="utf-8")
 elif agent == "agy":

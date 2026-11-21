@@ -241,7 +241,7 @@ def cleanup_stale(runs: Runs) -> list[str]:
     notes = []
     for entry in runs.list_active():
         tid = entry.get("task_id")
-        if not tid or procutil.pid_alive(entry.get("crew_pid")):
+        if not tid or procutil.same_process(entry.get("crew_pid"), entry.get("crew_create_time")):
             continue
         wpid = entry.get("worker_pid")
         if wpid and procutil.same_process(wpid, entry.get("worker_create_time")):
@@ -280,6 +280,7 @@ def reserve(runs: Runs, task_id: str, mode: str, limit: int, initial_state: dict
                 raise CrewError(EXIT_BUSY, problem)
             ap = runs.active_path(task_id)
             atomic_write_json(ap, {"task_id": task_id, "mode": mode, "crew_pid": os.getpid(),
+                                   "crew_create_time": initial_state.get("crew_create_time"),
                                    "worker_pid": None, "worker_create_time": None,
                                    "started": initial_state["started"]})
             created.append(ap)

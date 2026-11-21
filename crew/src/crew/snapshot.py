@@ -148,6 +148,8 @@ def _differs(a: dict[str, Any], b: dict[str, Any]) -> bool:
 
 def diff(before: dict[str, Any], after: dict[str, Any], root: Path) -> list[dict[str, Any]]:
     """Files changed between snapshots. Pre-existing dirty files count only if they changed."""
+    if before.get("mode") != after.get("mode"):
+        raise ValueError("snapshot collection mode changed")
     b, a = before.get("files", {}), after.get("files", {})
     changes: list[dict[str, Any]] = []
     for rel in sorted(set(a) | set(b)):
