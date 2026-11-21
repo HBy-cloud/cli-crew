@@ -19,9 +19,10 @@ The following private records may be present in a maintainer checkout:
 - Write this file, code comments, and handoff records in English. `docs/SPEC.md` is in Korean.
 
 ## Rules
-1. Before work, read this file and the relevant project documentation. In a maintainer checkout, read
-   `docs/SPEC.md` (§1–§2, §4–§10, and §14; read §3, §11–§13, §15 when needed). Check `git status`
-   and read the latest local handoff, if present. Preserve existing changes.
+1. Before work, read this file and the relevant project documentation.
+   If `TRUTH.md` exists at the repository root, read it before starting work.
+   In a maintainer checkout, read `docs/SPEC.md` (§1–§2, §4–§10, and §14; read §3, §11–§13, §15 when needed).
+   Check `git status` and read the latest local handoff, if present. Preserve existing changes.
 2. Stay within the requested scope. Do not invent requirements; ask the user when the spec is silent.
 3. Keep behaviour changes to `crew` or the skill in sync across `skill/cli-crew/` (`SKILL.md`, `references/`,
    `templates/`), `README.md`, `README.ko.md`, `crew/README.md`, and `crew/README.ko.md`. In a

@@ -7,6 +7,8 @@ dist/
 crew/tests/_work/
 
 # Local development records
+/TRUTH.md
+/git-workflow-prompt.md
 /handoffs/
 /docs/research/
 /docs/SPEC.md
@@ -14,6 +16,12 @@ crew/tests/_work/
 /docs/SPEC_DRAFT.md
 /docs/DEV_PLAN.md
 /docs/original-requirements.md
+*.local.md
+/tmp/
+
+# OS metadata
+.DS_Store
+Thumbs.db
 
 # Local credentials, agent settings, and logs
 .env
