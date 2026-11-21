@@ -1,5 +1,6 @@
 # cli-crew
 
+[![tests](https://github.com/HBy-cloud/cli-crew/actions/workflows/test.yml/badge.svg)](https://github.com/HBy-cloud/cli-crew/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776ab.svg)
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078d4.svg)

@@ -27,7 +27,9 @@ ROWS = """| S1 | done | main-subagent | - | Locate the exporter code | Paths cit
 | S3 | todo | main | S2 | Apply fixes and run tests | Test suite passes |"""
 
 
-class PlanTests(Base):
+class PlanHelpers:
+    """Shared helpers; mixed into test classes so their test methods are not inherited twice."""
+
     def write_plan(self, pid="P1", status="active", rows=ROWS) -> Path:
         self.runs.ensure()
         path = self.runs.plan_path(pid)
@@ -48,6 +50,8 @@ class PlanTests(Base):
         self.assertEqual(code, 0 if data["ok"] else 2)
         return data["errors"]
 
+
+class PlanTests(PlanHelpers, Base):
     def test_new_duplicate_and_template_needs_filling(self):
         code, out, _ = crew("plan", "new", "P1")
         self.assertEqual(code, 0)
@@ -138,7 +142,7 @@ class PlanTests(Base):
         self.assertNotIn("P-old", text)
 
 
-class ReviewFindingTests(PlanTests):
+class ReviewFindingTests(PlanHelpers, Base):
     """Regression cases from the 2026-11-21 codex review (rev-uncommitted-1)."""
 
     def test_secrets_are_redacted_in_check_and_show(self):
@@ -185,3 +189,54 @@ class ReviewFindingTests(PlanTests):
         crew("plan", "new", "P9")
         self.assertEqual([p.name for p in self.runs.plans.iterdir() if p.name.startswith(".")], [])
         self.assertEqual(crew("plan", "new", "P9")[0], 5)
+
+
+def make_dir_link(link: Path, target: Path) -> None:
+    """Directory junction on Windows (no admin rights needed), symlink elsewhere."""
+    if os.name == "nt":
+        import subprocess
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], check=True, capture_output=True)
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
+class ContainmentTests(Base):
+    """`.agent-runs` subfolders that resolve outside the project are refused (review finding 2)."""
+
+    def setUp(self):
+        super().setUp()
+        self.outside = self.root.parent / (self.root.name + "-outside")
+        self.outside.mkdir()
+        self.runs.ensure()
+
+    def tearDown(self):
+        for p in (self.runs.plans, self.runs.contracts):
+            if p.is_dir() and os.path.realpath(p) != os.path.abspath(p):
+                os.rmdir(p) if os.name == "nt" else os.unlink(p)
+        super().tearDown()
+        import shutil
+        shutil.rmtree(self.outside, ignore_errors=True)
+
+    def test_plans_junction_is_refused(self):
+        make_dir_link(self.runs.plans, self.outside)
+        code, _, err = crew("plan", "new", "P1")
+        self.assertEqual(code, 3)
+        self.assertIn("resolves outside the project", err)
+        self.assertEqual(list(self.outside.iterdir()), [])
+        self.assertEqual(crew("plan", "show")[0], 3)
+        p = self.contract()
+        p.write_text(p.read_text(encoding="utf-8").replace("ephemeral: false\n---",
+                     "ephemeral: false\nplan: P1\nplan_step: S1\n---"), encoding="utf-8")
+        code, out, _ = crew("contract", "check", str(p))
+        self.assertEqual(code, 2)
+        self.assertIn("resolves outside the project", out)
+        code, out, _ = crew("handoff", "--agent", "t", "--task", "x", "--status", "Done", "--lang", "en")
+        self.assertEqual(code, 0)
+        self.assertIn("plans skipped", Path(out.strip()).read_text(encoding="utf-8"))
+
+    def test_contracts_junction_is_refused(self):
+        os.rmdir(self.runs.contracts)
+        make_dir_link(self.runs.contracts, self.outside)
+        code, _, err = crew("contract", "new", "T-9")
+        self.assertEqual(code, 3)
+        self.assertEqual(list(self.outside.iterdir()), [])

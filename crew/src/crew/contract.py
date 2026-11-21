@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from crew.common import (
-    AGENTS, EFFORTS, HIGH_EFFORTS, TASK_ID_RE, home_dir, is_drive_root, is_within,
+    AGENTS, EFFORTS, HIGH_EFFORTS, TASK_ID_RE, CrewError, home_dir, is_drive_root, is_within,
     real, resolve_nearest,
 )
 from crew.state import Runs, retry_of_problem
@@ -350,6 +350,8 @@ def validate(c: Contract, s: dict[str, Any], root: Path, runs: Runs, cfg: dict[s
                 p = pl.load(runs.plan_path(plan_id))
             except ContractError as e:
                 errors.append(f"plan '{plan_id}': {e}")
+            except CrewError as e:
+                errors.append(f"plan '{plan_id}': {e.message}")
             else:
                 if pl.validate(p)[0]:
                     errors.append(f"plan '{plan_id}' is invalid; run: crew plan check {plan_id}")

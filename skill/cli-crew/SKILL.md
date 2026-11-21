@@ -33,9 +33,8 @@ The user supplies the outcome. Main owns task decomposition, worker selection, s
 - `crew:<agent>`: a crew worker when you need a different model's independent review, a scoped edit with a
   boundary check, or a recorded result for later routing decisions.
 
-Rules for your own subagents: they never run `crew` or delegate further; only you delegate. While any crew run is
-active, neither you nor your subagents edit project files. Verify subagent output as you would a worker's, and
-record what they did in the plan or handoff.
+Rules for your own subagents: they never run `crew` or delegate further, and they follow the same edit rules as you
+(see 4). Verify their output as you would a worker's, and record what they did in the plan or handoff.
 
 **Parallel work.** Parallelize reads only; edits run one at a time, whether by you, a subagent, or a worker.
 - Independent same-model searches or investigations: your own subagents, if your CLI has them.
@@ -81,10 +80,8 @@ When delegation is a realistic option, run `crew routing --kind <investigate|imp
 - Weak: overrides and unjudged results. With few samples or missing usage, decide by task difficulty and the cost rules.
 - The numbers cover the worker only; add main's briefing and checks. Do not run workers merely to collect data.
 - `crew compare <ID> <ID> --json` compares specific completed runs. A null cost is unmeasured.
-- Older `crew` without `routing`: use the contract workflow without `--kind` and tell the user history needs the update.
 For each delegated task, choose the CLI, model and reasoning effort together. Use a supported model ID or deliberately select the CLI default (`model: null`). Set the effort in the contract and give a one-line reason based on difficulty, cost and verification needs. Facts to weigh:
-- Claude in `--restricted` write mode confines edits to the project root and its descendants and provides no shell.
-  Within the project, `crew` tells the worker which `write_paths` it may edit and checks observed changes against those paths after the run.
+- claude `--restricted` write mode: edits confined to the project, no shell; `crew` names the allowed `write_paths` and checks changes against them.
 - codex: rejects writes outside the project; no shell in sandbox.
 - agy: does **not** enforce write boundaries. use agy only for read tasks.
 - No worker is prevented from *reading* secret files except claude `--restricted` (limited to the project and
@@ -129,8 +126,7 @@ For each delegated task, choose the CLI, model and reasoning effort together. Us
 ## 6. Decide
 - DONE, DONE_UNVERIFIED or PARTIAL after your own checks: `crew accept <ID> --verified "<what you ran/checked>"`.
   Required for DONE_UNVERIFIED and PARTIAL; for DONE it gives later routing decisions verification evidence.
-- FAILED / BLOCKED / TIMEOUT / CANCELLED / STALE / violations: usually `crew reject <ID> --reason "..."`.
-  `--override --reason` only when you can justify it to the user.
+- FAILED / BLOCKED / TIMEOUT / CANCELLED / STALE / violations: usually `crew reject <ID> --reason "..."`; `--override --reason` only when you can justify it to the user.
 - After two rejections in the same `retry_of` chain, stop re-delegating and report to the user.
 - For an `ORPHANED` task (crew exited while the worker is still running; `crew status` shows `ORPHANED` or `ORPHANED?`), run `crew cancel <ID>` to preview cancellation.
   Show the user which worker would be stopped and ask whether to stop it. After explicit approval, run the confirmation command printed by the preview, including its `--target` value.
@@ -141,8 +137,7 @@ For each delegated task, choose the CLI, model and reasoning effort together. Us
   the project's handoff folder. It lists active plans and their linked runs. Fill in every TODO with verified facts only.
 - If the project already has progress/decision documents, update those; do not create new ones.
 - No commit, push, delete, deploy, or external sending without an explicit user request.
-- Cleanup of worker session logs only when the user wants it: `crew clean` (preview) → `crew clean --yes`.
-  It deletes only crew-created codex sessions; agy conversations are reported, not deleted.
+- Clean worker session logs only when the user asks: `crew clean` (preview), then `crew clean --yes`. It deletes only crew-created codex sessions and reports agy conversations.
 
 ## References
 - `references/protocol.md` — contract fields, statuses, exit codes, approval rules.

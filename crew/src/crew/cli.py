@@ -255,7 +255,7 @@ def cmd_plan_show(a) -> int:
     _, runs = _root_and_runs()
     if not a.plan_id:
         rows, lines = [], []
-        for path in sorted(runs.plans.glob("*.md")) if runs.plans.is_dir() else []:
+        for path in runs.plan_files():
             try:
                 p = pl.load(path)
             except ct.ContractError as e:
@@ -664,24 +664,28 @@ def cmd_handoff(a) -> int:
     diffstat = ""
     if snapshot.is_git_repo(root):
         r = subprocess.run(["git", "-C", str(root), "diff", "--stat", "--", "."], capture_output=True, check=False)
-        out = r.stdout.decode("utf-8", "replace").strip()
+        out = r.stdout.decode("utf-8", "replace").rstrip()  # keep the first line's leading space
         if out:
             diffstat = "\n```\n" + "\n".join(out.splitlines()[-30:]) + "\n```\n"
     tpl = HANDOFF_KO if lang == "ko" else HANDOFF_EN
     plan_ids = {str(s["plan"]) for s in states if s.get("plan")}
-    if runs.plans.is_dir():
-        for path in runs.plans.glob("*.md"):
-            try:
-                if pl.load(path).fields.get("status") == "active":
-                    plan_ids.add(path.stem)
-            except ct.ContractError:
-                continue
     plan_lines = []
+    try:
+        plan_files = runs.plan_files()
+    except CrewError as e:
+        plan_files, plan_ids = [], set()
+        plan_lines.append(f"- plans skipped: {e.message}")
+    for path in plan_files:
+        try:
+            if pl.load(path).fields.get("status") == "active":
+                plan_ids.add(path.stem)
+        except ct.ContractError:
+            continue
     records = _plan_records(runs)
     for pid in sorted(plan_ids):
         try:
             p = pl.load(runs.plan_path(pid))
-        except ct.ContractError:
+        except (ct.ContractError, CrewError):
             plan_lines.append(f"- {pid}: plan file missing or unreadable")
             continue
         links = pl.linked_runs(pid, records)

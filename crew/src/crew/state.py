@@ -10,7 +10,8 @@ from typing import Any, Iterator
 
 from crew import procutil
 from crew.common import (
-    EXIT_BUSY, EXIT_DUP, CrewError, atomic_write_json, now_iso, read_json,
+    EXIT_BUSY, EXIT_DUP, EXIT_GUARD, CrewError, atomic_write_json, is_within, now_iso, read_json,
+    resolve_nearest,
 )
 
 RESERVE_WAIT_S = 10.0
@@ -32,12 +33,28 @@ class Runs:
         self.history = self.dir / "history.jsonl"
         self.plans = self.dir / "plans"
 
+    def contained(self, path: Path) -> Path:
+        """Refuse paths under .agent-runs that a link or junction resolves outside the project (SPEC 4.0, 8)."""
+        if not is_within(resolve_nearest(path), self.root):
+            raise CrewError(EXIT_GUARD, f"{path} resolves outside the project ({resolve_nearest(path)}); "
+                                        "remove the link or junction")
+        return path
+
     def plan_path(self, plan_id: str) -> Path:
-        return self.plans / f"{plan_id}.md"
+        return self.contained(self.plans / f"{plan_id}.md")
+
+    def plan_files(self) -> list[Path]:
+        if not self.contained(self.plans).is_dir():
+            return []
+        return sorted(self.contained(p) for p in self.plans.glob("*.md"))
 
     def ensure(self) -> None:
+        for d in (self.dir, self.contracts, self.active):
+            self.contained(d)
         self.contracts.mkdir(parents=True, exist_ok=True)
         self.active.mkdir(parents=True, exist_ok=True)
+        for d in (self.dir, self.contracts, self.active):
+            self.contained(d)
         gi = self.dir / ".gitignore"
         if not gi.exists():
             gi.write_text("*\n", encoding="utf-8")
