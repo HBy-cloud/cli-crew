@@ -60,10 +60,6 @@ elif scenario == "blocked":
     stderr_lines.append("patch rejected: writing outside of the project; rejected by user approval settings")
 elif scenario == "no_result":
     text = "I did something but forgot the block."
-elif scenario == "invalid_status":
-    text = "x\n## RESULT\nSTATUS: maybe\n"
-elif scenario == "quote_error":
-    text = "The log says 'Access is denied' and 'patch rejected'.\n\n" + RESULT_OK
 elif scenario == "usage_limit":
     stderr_lines.append("ERROR: You've hit your usage limit. Try again later.")
     exit_code = 1

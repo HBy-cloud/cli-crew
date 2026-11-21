@@ -171,13 +171,6 @@ def find_project_root(start: str | os.PathLike | None = None) -> Path:
     return root
 
 
-def rel_to(path: Path, root: Path) -> str:
-    try:
-        return Path(os.path.relpath(path, root)).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
 def is_secret_name(name: str) -> bool:
     low = name.lower()
     return any(fnmatch.fnmatch(low, pat) for pat in SECRET_NAME_PATTERNS)

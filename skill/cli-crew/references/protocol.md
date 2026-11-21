@@ -18,7 +18,7 @@ This reference describes the worker protocol for the main agent. Maintainer chec
 | max_retries | 0 or 1 | retry only on transient errors, never after partial writes or usage limits |
 | retry_of | previous REJECTED task id | chain limited to two rejections |
 | ephemeral | true/false | codex only; requires allow_subagents=true |
-| worker_handoff | true/false | worker writes its own handoff file (`handoffs/<date>/<time>-<agent>-<task>.md`); codex/claude/agy, mode=read, no add_dirs; runs in parallel with reads |
+| worker_handoff | true/false | worker writes its own handoff file (`handoffs/<date>/<time>-<agent>-<task>.md`); codex/claude/agy, mode=read, no add_dirs; runs in parallel with reads; sections: purpose, decisions and why, verification, unfinished, next |
 | plan | plan id or null | set together with plan_step; the cplan must pass `crew plan check` (cplan is the name of this plan) |
 | plan_step | step id or null | must exist in the plan; a different executor in the plan is a warning |
 
@@ -91,6 +91,8 @@ Delegating in a project whose instructions restrict it · sending sensitive proj
 
 ## Files
 Use `crew compare <ID> <ID> [--json]` to inspect verification evidence, violations, worker time and measured usage for specific completed runs. Older archived runs can lack these fields.
+`crew check <ID>` prints `unverified citation:` lines for file/line citations it cannot find (`crew run` does not); `--recheck` recomputes boundary and subagent checks from saved evidence without changing the state file.
+`crew clean --yes` deletes only crew-created codex sessions and reports agy conversations.
 
 `.agent-runs/` (self-gitignored): contracts, state JSON, prompts, per-attempt logs/events/results,
 snapshots, subagent evidence, `history.jsonl` (permanent id registry), `locks/`.

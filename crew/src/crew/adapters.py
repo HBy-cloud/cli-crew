@@ -243,7 +243,6 @@ class Parsed:
     print_timeout: bool = False
     subagent_used: bool | None = None  # None = unknown from this source
     subagent_ids: list[str] = field(default_factory=list)
-    events: list[Any] = field(default_factory=list)
 
 
 AGY_DIAG_PREFIX = re.compile(r"^\s*(jetski:|\[agy\]|AGY_ERROR|error:)", re.I)
@@ -282,7 +281,6 @@ def parse(agent: str, stdout_path: Path, stderr_path: Path, result_path: Path) -
 
     if agent == "codex":
         objs, other = _jsonl(out)
-        p.events = objs
         p.diag.extend(other)
         completed = [o for o in objs if o.get("type") == "turn.completed"]
         totals = [_token_sum(o.get("usage"), ("input_tokens", "output_tokens")) for o in completed]
@@ -305,7 +303,6 @@ def parse(agent: str, stdout_path: Path, stderr_path: Path, result_path: Path) -
 
     elif agent == "agy":
         objs, other = _jsonl(out)
-        p.events = objs
         p.diag.extend(other)  # non-JSON lines are CLI messages (jetski:, [agy], ...)
         steps: dict[int, list[str]] = {}
         result_obj: dict[str, Any] | None = None
@@ -372,7 +369,6 @@ def parse(agent: str, stdout_path: Path, stderr_path: Path, result_path: Path) -
             p.diag.extend(other)
             data = objs[-1] if objs else None
         if isinstance(data, dict):
-            p.events = [data]
             p.final_text = data.get("result") or ""
             p.is_error = bool(data.get("is_error"))
             p.permission_denials = data.get("permission_denials") or []
@@ -392,7 +388,6 @@ def parse(agent: str, stdout_path: Path, stderr_path: Path, result_path: Path) -
                 p.diag.append(f"claude permission_denial: {json.dumps(d, ensure_ascii=False)[:500]}")
     elif agent == "copilot":
         objs, other = _jsonl(out)
-        p.events = objs
         p.diag.extend(other)
         terminal = False
         for event in objs:

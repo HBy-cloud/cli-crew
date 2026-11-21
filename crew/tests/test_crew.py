@@ -1039,7 +1039,6 @@ class EnforcementGapTests(Base):
         self.assertIn(peer, s["handoff_allowed_slots"])
 
     def test_peer_that_ended_just_before_start_is_not_exempt(self):
-        import time
         from crew import runner
         s = {"task_id": "T-h", "handoff_slot": "handoffs/own.md", "started_epoch": 1000.0, "ended_epoch": 1010.0}
         self.peer_state("T-peer", "handoffs/peer.md", started_epoch=990.0, ended_epoch=999.92, duration_s=9.9)

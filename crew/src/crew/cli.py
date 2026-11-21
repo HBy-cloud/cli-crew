@@ -16,8 +16,7 @@ from typing import Any
 from crew import __version__, adapters, citations, classify, contract as ct, plan as pl, routing, runner, snapshot, state as st
 from crew.common import (
     AGENTS, EXIT_DUP, EXIT_GUARD, EXIT_OK, EXIT_USAGE, KST, TASK_ID_RE, CrewError, atomic_write_text,
-    home_dir, is_drive_root, load_config, now, now_iso, parse_iso, read_json, read_text, real, rel_to,
-    same_path,
+    load_config, now, now_iso, parse_iso, read_json, read_text,
 )
 from crew.safety import INSTRUCTION_FILES, instruction_dirs, scan_instructions
 from crew.subagents import path_size, verify_codex_rollout_for_delete
@@ -163,7 +162,7 @@ def cmd_detect(a) -> int:
 def cmd_contract_new(a) -> int:
     root, runs = _root_and_runs()
     runs.ensure()
-    if not re.fullmatch(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$", a.task_id):
+    if not re.fullmatch(TASK_ID_RE, a.task_id):
         raise CrewError(EXIT_USAGE, "invalid task_id")
     path = runs.contracts / f"{a.task_id}.md"
     if path.exists() or a.task_id in runs.registry():
@@ -607,8 +606,7 @@ def cmd_reject(a) -> int:
 # ------------------------------------------------------------ handoff
 
 def _slug(text: str) -> str:
-    s = re.sub(r"[^a-z0-9-]+", "-", text.lower()).strip("-")
-    return re.sub(r"-{2,}", "-", s) or "task"
+    return runner.slug(text)
 
 
 HANDOFF_EN = """# Handoff

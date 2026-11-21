@@ -118,6 +118,12 @@ def write_agy_settings(runs: st.Runs, root: Path, s: dict[str, Any]) -> Path:
     return path
 
 
+def slug(text: str) -> str:
+    """Lowercase letters, digits and single hyphens (handoff file names)."""
+    s = re.sub(r"[^a-z0-9-]+", "-", text.lower()).strip("-")
+    return re.sub(r"-{2,}", "-", s) or "task"
+
+
 def handoff_slot(root: Path, agent: str, task_id: str) -> str:
     """Relative path of the handoff file a worker may write (worker_handoff=true)."""
     base = "handoffs"
@@ -125,9 +131,8 @@ def handoff_slot(root: Path, agent: str, task_id: str) -> str:
         if (root / name).is_dir():
             base = name
             break
-    slug = re.sub(r"-{2,}", "-", re.sub(r"[^a-z0-9-]+", "-", task_id.lower()).strip("-")) or "task"
     t = time.localtime()
-    return f"{base}/{time.strftime('%Y-%m-%d', t)}/{time.strftime('%H%M', t)}-{agent}-{slug}.md"
+    return f"{base}/{time.strftime('%Y-%m-%d', t)}/{time.strftime('%H%M', t)}-{agent}-{slug(task_id)}.md"
 
 
 def handoff_violations(runs: st.Runs, changes: list[dict[str, Any]], s: dict[str, Any], root: Path) -> list[dict[str, Any]]:
