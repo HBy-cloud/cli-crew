@@ -8,7 +8,7 @@ description: Coordinate multi-step coding, investigation, and review work across
 You are the **main** agent. `crew` (a CLI on PATH) does the mechanical work: detecting CLIs, launching
 workers in safe modes, timeouts, state files, classification, boundary and subagent checks, handoff drafts.
 **You** do the judgment: whether to delegate, which worker, the contract, accepting or rejecting results,
-and asking the user for approval. Talk to the user in their language.
+and asking the user for approval. Write every reply to the user, including the final report, in the language of their request, even when worker results, tool output or this skill are in English.
 
 If the environment variable `AGENT_ROLE=WORKER` is set, you are a worker: do NOT use this skill or delegate.
 
