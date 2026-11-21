@@ -339,7 +339,15 @@ class ReviewerTests(PlanHelpers, Base):
         path.write_text(PLAN7.replace("## Approvals", "## Revisions\n| date | change | reason or evidence |\n| --- | --- | --- |\n"
                                       "| 2026-11-21 | S3 review skipped | trivial report, the user reads it | \n\n## Approvals"),
                         encoding="utf-8")
-        self.assertNotIn("step S3 has no reviewer step", " | ".join(self.warnings()))
+        text = " | ".join(self.warnings())
+        self.assertNotIn("step S3 has no reviewer step", text)
+        self.assertIn("step S3: 'small' or 'simple' is not an accepted reason", text)
+        path.write_text(PLAN7.replace("## Approvals", "## Revisions\n| date | change | reason or evidence |\n| --- | --- | --- |\n"
+                                      "| 2026-11-21 | S3 review skipped | token budget is used up, no budget for another review | \n\n## Approvals"),
+                        encoding="utf-8")
+        text = " | ".join(self.warnings())
+        self.assertNotIn("step S3 has no reviewer step", text)
+        self.assertNotIn("not an accepted reason", text)
 
     def test_review_block_parse(self):
         from crew import classify

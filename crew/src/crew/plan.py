@@ -174,6 +174,10 @@ def _cycle(steps: list[Step]) -> list[str] | None:
     return None
 
 
+NOT_OK_SKIP = re.compile(r"(?i)small|simple|trivial|easy|작|단순|간단|사소")
+OK_SKIP = re.compile(r"(?i)cost|token|budget|credit|unavailable|no other|opt|비용|토큰|예산|불가|거절|옵트")
+
+
 def _review_warnings(plan: Plan) -> list[str]:
     """Reviewer rules (D-28): every deliverable has an independent reviewer step, or a Revisions row says why not."""
     out: list[str] = []
@@ -198,9 +202,11 @@ def _review_warnings(plan: Plan) -> list[str]:
             continue
         deliverable = s.step not in dependents or (executor_agent(s.executor) is not None)
         if deliverable and s.step not in reviewed:
-            skipped = any(s.step in ln and re.search(r"(?i)review|리뷰|검증", ln) for ln in rev_text.splitlines())
-            if not skipped:
+            lines = [ln for ln in rev_text.splitlines() if s.step in ln and re.search(r"(?i)review|리뷰|검증", ln)]
+            if not lines:
                 out.append(f"step {s.step} has no reviewer step (add one with the reviews column, or record in Revisions why the review is skipped)")
+            elif all(NOT_OK_SKIP.search(ln) and not OK_SKIP.search(ln) for ln in lines):
+                out.append(f"step {s.step}: 'small' or 'simple' is not an accepted reason to skip the review; accepted: cost or token budget, no other CLI available, the user opted out")
     return out
 
 
