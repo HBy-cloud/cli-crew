@@ -823,7 +823,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_json(sp)
     sp.set_defaults(func=cmd_contract_check)
 
-    pp = sub.add_parser("plan", help="create, check or show main's plan for a multi-step goal")
+    pp = sub.add_parser("plan", help="create, check or show the cplan (crew-plan): main's plan for the whole task")
     psub = pp.add_subparsers(dest="pcmd", required=True)
     sp = psub.add_parser("new", help="create .agent-runs/plans/<PLAN_ID>.md from the template")
     sp.add_argument("plan_id")

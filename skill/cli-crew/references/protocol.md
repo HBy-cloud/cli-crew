@@ -19,13 +19,13 @@ Source of truth: `docs/SPEC.md` (v1.0) in the cli-crew repository. This is a con
 | retry_of | previous REJECTED task id | chain limited to two rejections |
 | ephemeral | true/false | codex only; requires allow_subagents=true |
 | worker_handoff | true/false | worker writes its own handoff file (`handoffs/<date>/<time>-<agent>-<task>.md`); codex/claude, mode=read, no add_dirs; runs in parallel with reads |
-| plan | plan id or null | set together with plan_step; the plan must pass `crew plan check` |
+| plan | plan id or null | set together with plan_step; the cplan must pass `crew plan check` (cplan is the name of this plan) |
 | plan_step | step id or null | must exist in the plan; a different executor in the plan is a warning |
 
 Body sections `## Objective` and `## Done when` are required.
 
 ## Plans
-File: `.agent-runs/plans/<plan_id>.md` (`crew plan new`). Frontmatter `plan_id` (equals file name), `status`: active | done | abandoned.
+File: `.agent-runs/plans/<plan_id>.md` (`crew plan new`). Sections: Goal, Steps, Revisions (date, change, reason or evidence), Approvals, Notes. Frontmatter `plan_id` (equals file name), `status`: active | done | abandoned.
 Sections: `## Goal` (outcome and how main verifies it), `## Steps` table, `## Approvals`, `## Notes`.
 
 | column | values |

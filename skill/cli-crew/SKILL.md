@@ -43,18 +43,19 @@ Rules for your own subagents: they never run `crew` or delegate further, and the
 - Your usage limits are tight, the results must be recorded, or your CLI has no subagents: crew read workers.
 - Cross-check parallel results against each other. Where they disagree, decide from the source yourself.
 
-**Plan multi-step work.** When the goal needs two or more steps handed to subagents or workers (independent or
-parallel ones too, and built-in subagents count), or work may continue in another session, write a plan before the first handoff:
-1. `crew plan new <PLAN_ID>`, then edit `.agent-runs/plans/<PLAN_ID>.md`: Goal (with how you will verify it),
-   one Steps row per step (`executor`: `main`, `main-subagent`, or `crew:<agent>[/<model or default>[/<effort>]]`;
-   `depends_on`; a concrete `verify`), and the Approvals needed. `crew plan check <PLAN_ID>` must pass.
-2. Tell the user the plan in a few lines and continue. Stop for approvals listed in the plan and for any
-   approval the run rules require later (restrictions, sensitive data, cost).
-3. Link each crew contract to its step (`crew contract new ... --plan <PLAN_ID> --step <STEP>`).
-4. Update step status (`todo`, `doing`, `done`, `dropped`) as you go. Editing the plan file during a run is allowed.
-   `crew plan show <PLAN_ID>` lists linked runs, steps ready to start, and status mismatches. When the goal is
-   verified or abandoned, set the plan status to `done` or `abandoned`.
-Skip the plan only for small tasks and a single delegation; "the steps are simple" is not a reason to skip.
+**cplan (crew-plan, managed with `crew plan`) first.** Before doing any step, right after `crew detect` and reading the instructions (section 1), write the
+cplan for the WHOLE task whenever it has two or more steps in total, whoever does them (you, your subagents, workers), or may continue
+in another session. It is the one plan that keeps the work consistent.
+1. `crew plan new <ID>`, then edit `.agent-runs/plans/<ID>.md`: Goal (with how you will verify it), one Steps row per step, including
+   your own (`executor`: `main`, `main-subagent`, or `crew:<agent>[/<model or default>[/<effort>]]`; `depends_on`; a concrete `verify`),
+   and the Approvals needed. `crew plan check <ID>` must pass.
+2. Tell the user the cplan in a few lines and continue. Stop for approvals listed in it and for any approval the run rules require later.
+3. Link each crew contract to its step (`crew contract new ... --plan <ID> --step <STEP>`).
+4. When evidence changes the plan (a step fails, a worker is blocked, a source is unavailable, scope shifts), YOU edit the cplan before
+   acting: add, change or drop steps and add a Revisions row (date, change, reason or evidence). Never drift from it silently.
+5. Keep step status (`todo`, `doing`, `done`, `dropped`) current; `crew plan show <ID>` lists linked runs and ready steps. At the end
+   set the status to `done` or `abandoned`.
+Skip the cplan only for a one-step task; "the steps are simple" is not a reason to skip.
 
 ## 1. Start
 1. Run `crew detect --paths <target paths>`.

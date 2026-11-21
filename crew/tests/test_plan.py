@@ -80,6 +80,26 @@ class PlanTests(PlanHelpers, Base):
         self.runs.plan_path("P2").write_text(PLAN.format(pid="OTHER", status="active", rows=ROWS), encoding="utf-8")
         self.assertTrue(any("does not match the file name" in e for e in self.plan_errors("P2")))
 
+    def test_template_has_revisions_section(self):
+        code, out, _ = crew("plan", "new", "P9")
+        self.assertEqual(code, 0)
+        text = Path(out.strip()).read_text(encoding="utf-8")
+        self.assertIn("## Revisions", text)
+        self.assertIn("WHOLE task", text)
+        self.assertEqual(crew("plan", "check", "P9", "--json")[0], 2)
+
+    def test_dropped_step_needs_a_revision_entry(self):
+        rows = ROWS.replace("| S3 | todo |", "| S3 | dropped |")
+        self.write_plan(rows=rows)
+        code, out, _ = crew("plan", "check", "P1", "--json")
+        self.assertIn("Revisions", " ".join(json.loads(out)["warnings"]))
+        path = self.runs.plan_path("P1")
+        extra = ["", "## Revisions", "| date | change | reason or evidence |", "| --- | --- | --- |",
+                 "| 2026-11-21 | dropped S3 | the review found nothing to fix |", ""]
+        path.write_text(path.read_text(encoding="utf-8") + "\n".join(extra), encoding="utf-8")
+        code, out, _ = crew("plan", "check", "P1", "--json")
+        self.assertNotIn("Revisions", " ".join(json.loads(out)["warnings"]))
+
     def test_contract_links(self):
         self.write_plan()
         code, out, _ = crew("contract", "check", str(self.linked_contract()), "--json")

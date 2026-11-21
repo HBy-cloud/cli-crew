@@ -22,7 +22,7 @@ plan_id: "{plan_id}"
 status: active
 ---
 ## Goal
-TODO: the outcome the user asked for and how main will verify it.
+TODO: the outcome the user asked for and how main will verify it. This cplan covers the WHOLE task, including steps main does itself.
 
 ## Steps
 | step | status | executor | depends_on | task | verify |
@@ -33,6 +33,10 @@ TODO: the outcome the user asked for and how main will verify it.
      executor: {executors}
      depends_on: step ids separated by commas, or -
      Do not use '|' inside a cell. -->
+
+## Revisions
+| date | change | reason or evidence |
+| --- | --- | --- |
 
 ## Approvals
 - none
@@ -209,6 +213,9 @@ def validate(plan: Plan) -> tuple[list[str], list[str]]:
         if open_steps:
             warnings.append(f"plan is done but steps are still open: {', '.join(open_steps)}")
 
+    rev_rows = [ln for ln in plan.sections.get("Revisions", "").splitlines() if ln.strip().startswith("|")]
+    if any(s.status == "dropped" for s in plan.steps) and len(rev_rows) <= 2:
+        warnings.append("a step is dropped but the Revisions table has no entry explaining why")
     raw = plan.path.read_text(encoding="utf-8")
     for rx in SECRET_RES:
         if rx.search(raw):
