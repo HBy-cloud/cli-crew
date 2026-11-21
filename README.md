@@ -138,17 +138,23 @@ The full rules are in the [verification and approval protocol](skill/cli-crew/re
 
 ## How cli-crew differs from other orchestrators
 
-Several tools already let Claude Code call Codex, Gemini or Antigravity, from single-purpose "second opinion" skills to full multi-agent orchestrators such as [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode). Those tools optimize for autonomy. cli-crew optimizes for control:
+Built-in subagents and native swarms (such as Claude Code subagents or Antigravity `/swarm`) and autonomy-first orchestrators (such as [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode)) optimize for **speed and throughput**. cli-crew is a **cross-model audit and handoff harness** that optimizes for **control, independent verification, and verifiable records**:
 
-| | Autonomy-first orchestrators (e.g. oh-my-claudecode) | cli-crew |
-| --- | --- | --- |
-| Goal | Run teams of agents until the goal passes | Delegate only when it pays off; small work stays with the main agent |
-| Orchestrator | Claude Code | Any of Claude Code, Codex or Antigravity |
-| Worker permissions | Headless workers can run with auto-approve flags so they work unattended (their SECURITY.md lists Codex `--dangerously-bypass-approvals-and-sandbox` and Gemini `--approval-mode yolo`) | Workers run in safe modes only; bypass flags are refused |
-| Boundaries between agents | Agents share the filesystem (listed as a known limitation in their SECURITY.md) | Each write task names its paths; visible changes outside them are reported (ignored files and excluded folders are not checked) |
-| "Done" | Automated verify/fix loops until tests, build and lint pass | Anything short of a clean DONE needs the main agent's recorded verification before acceptance; the skill asks for it on every acceptance |
+| | Native subagents / swarms | Autonomy-first orchestrators (e.g. oh-my-claudecode) | cli-crew |
+| --- | --- | --- | --- |
+| Primary goal | Fast parallel exploration and edits inside one CLI | Run teams of agents until tests/build pass | Cross-provider audit, bounded delegation, and multi-CLI handoffs |
+| Providers & models | Same CLI / provider ecosystem | Claude Code driving external CLIs | Any of Claude Code, Codex, or Antigravity as main or worker |
+| Worker permissions | Shares session tools or isolated workspace branches | Headless workers can run with auto-approve flags (their SECURITY.md lists Codex `--dangerously-bypass-approvals-and-sandbox` and Gemini `--approval-mode yolo`) | Safe modes only; bypass flags are refused in code and workers have no shell |
+| Edit & test loop | Workers can edit files and run tests directly | Automated verify/fix loops until tests, build, and lint pass | Workers cannot run shell/tests and write tasks run one at a time; main runs all tests and builds |
+| Communication | Interactive multi-turn or shared message board | Automated multi-stage loop | One-shot contract execution (`codex exec`, `claude -p`, `agy --print`) |
+| Audit & boundaries | Session transcript only | Shared filesystem (listed as a known limitation in their SECURITY.md) | Per-task `write_paths`, before/after file snapshots, `## REVIEW` verdicts, and recorded acceptance reasons under `.agent-runs/` |
 
-If you want maximum automation, an autonomy-first orchestrator is the better fit. Choose cli-crew if you want workers that cannot skip approvals, and a record of who changed what and how it was checked. The comparison reflects the oh-my-claudecode README and SECURITY.md as read on 2026-11-21.
+**Honest trade-offs (when to use what):**
+- **Routine coding and implementation speed:** Native subagents, `/swarm`, or working solo are faster. Because cli-crew workers run one-shot in safe mode without shell access, cannot run tests themselves, execute writes serially, and require plan/contract/verification steps, using cli-crew on routine single-model tasks adds latency and token cost without improving scores (in our 10-task benchmark, a single modern main model already hit the ceiling alone).
+- **Cross-provider code review and defect detection:** This is where cli-crew pays off. A worker from a different provider (`codex`, `claude`, `agy`) checks deliverables against explicit criteria (`## REVIEW`) without trusting the author's claims, catching blind spots that single-model self-review misses.
+- **Strict governance and cross-CLI handoffs:** Choose cli-crew when you cannot allow `--yolo` / bypass flags, need credential-like environment variables stripped, want detective file-boundary checks, or need to hand off an active plan (`cplan` + `handoffs/`) when switching between Claude Code, Codex, and Antigravity.
+
+The oh-my-claudecode comparison reflects its README and SECURITY.md as read on 2026-11-21.
 
 ## Handing off to another CLI
 
