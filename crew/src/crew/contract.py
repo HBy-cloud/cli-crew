@@ -30,6 +30,7 @@ FIELDS: dict[str, Any] = {
     "max_retries": 1,
     "retry_of": None,
     "ephemeral": False,
+    "worker_handoff": False,
     "plan": None,
     "plan_step": None,
 }
@@ -60,6 +61,7 @@ timeout_min: 20
 max_retries: 1
 retry_of: null
 ephemeral: false
+worker_handoff: false
 plan: {plan}
 plan_step: {plan_step}
 ---
@@ -264,7 +266,7 @@ def validate(c: Contract, s: dict[str, Any], root: Path, runs: Runs, cfg: dict[s
         errors.append("write_paths must be a list")
     if not isinstance(s.get("add_dirs"), list):
         errors.append("add_dirs must be a list")
-    for k in ("allow_subagents", "ephemeral"):
+    for k in ("allow_subagents", "ephemeral", "worker_handoff"):
         if not isinstance(s.get(k), bool):
             errors.append(f"{k} must be true or false")
     t = s.get("timeout_min")
@@ -329,6 +331,13 @@ def validate(c: Contract, s: dict[str, Any], root: Path, runs: Runs, cfg: dict[s
 
     if s.get("allow_subagents") and mode == "write":
         errors.append("allow_subagents=true is only allowed with mode=read")
+    if s.get("worker_handoff") is True:
+        if mode != "read":
+            errors.append("worker_handoff=true is only for mode=read (a write task may list its handoff file in write_paths)")
+        if agent == "agy":
+            errors.append("worker_handoff=true is not allowed for agy (it does not enforce write boundaries)")
+        if s.get("add_dirs"):
+            errors.append("worker_handoff=true cannot be combined with add_dirs (the worker runs with write access)")
     if s.get("ephemeral"):
         if agent is None:
             errors.append("ephemeral=true requires agent=codex")

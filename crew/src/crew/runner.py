@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import signal
 import subprocess
 import time
@@ -54,11 +55,46 @@ class Cancelled(Exception):
 def build_prompt(s: dict[str, Any], contract_body: str) -> str:
     sub = ("You may use built-in subagents for read-only research only."
            if s.get("allow_subagents") else "Do not use built-in subagents / delegation tools.")
-    if s["mode"] == "read":
+    if s.get("handoff_slot"):
+        mode_rule = ("This is a READ-ONLY task except for your own handoff file. You may create exactly one file: "
+                     + s["handoff_slot"] + " . Do not modify, create, or delete anything else. Write the handoff in English or "
+                     "the language of the contract, with these sections: Purpose, Status, Decisions and why, Verification "
+                     "(what you checked, what you could not), Unfinished, Next. Facts only; no secrets or personal data. "
+                     "You still end your reply with the RESULT block.")
+    elif s["mode"] == "read":
         mode_rule = "This is a READ-ONLY task: do not modify, create, or delete any file."
     else:
         mode_rule = "Modify files ONLY under these paths (relative to the working directory): " + ", ".join(s["write_paths"])
     return HEADER.format(subagent_rule=sub, mode_rule=mode_rule) + contract_body.strip() + "\n"
+
+
+def handoff_slot(root: Path, agent: str, task_id: str) -> str:
+    """Relative path of the handoff file a worker may write (worker_handoff=true)."""
+    base = "handoffs"
+    for name in ("handoffs", "handoff"):
+        if (root / name).is_dir():
+            base = name
+            break
+    slug = re.sub(r"-{2,}", "-", re.sub(r"[^a-z0-9-]+", "-", task_id.lower()).strip("-")) or "task"
+    t = time.localtime()
+    return f"{base}/{time.strftime('%Y-%m-%d', t)}/{time.strftime('%H%M', t)}-{agent}-{slug}.md"
+
+
+def handoff_violations(runs: st.Runs, changes: list[dict[str, Any]], s: dict[str, Any], root: Path) -> list[dict[str, Any]]:
+    """Boundary check for worker_handoff tasks: only the own slot and the slots of other handoff tasks may change."""
+    from crew.common import is_within
+
+    slots = [s.get("handoff_slot")]
+    try:
+        for other in runs.registry():
+            try:
+                slots.append(read_json(runs.state_path(other)).get("handoff_slot"))
+            except (OSError, ValueError):
+                continue
+    except Exception:  # noqa: BLE001 - registry problems must not hide the own slot check
+        pass
+    allowed = [root / x for x in slots if x]
+    return [c for c in changes if not any(is_within(root / c["path"], a) for a in allowed)]
 
 
 def default_model(agent: str) -> str | None:
@@ -211,7 +247,11 @@ def finalize(runs: st.Runs, state: dict[str, Any], *, root: Path, write_paths_ab
             atomic_write_json(runs.file(f"{tid}.snap.after.json"), after)
             _add_file(state, f"{tid}.snap.after.json")
             changes = snapshot.diff(before, after, root)
-            viol = snapshot.violations(changes, state["mode"], write_paths_abs, root)
+            if state.get("worker_handoff"):
+                viol = handoff_violations(runs, changes, state, root)
+                state["handoff_written"] = (root / state["handoff_slot"]).is_file()
+            else:
+                viol = snapshot.violations(changes, state["mode"], write_paths_abs, root)
             state["changes"] = changes
             state["boundary_violations"] = viol
             if viol:
@@ -287,6 +327,15 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
         raise CrewError(EXIT_GUARD, "refusing to delegate from inside a WORKER (AGENT_ROLE=WORKER)")
     if s["agent"] == "agy" and s["mode"] == "write":
         raise CrewError(EXIT_GUARD, "agy does not enforce write boundaries; use a write-capable isolated worker")
+    if s.get("worker_handoff"):
+        if s["agent"] == "agy":
+            raise CrewError(EXIT_GUARD, "worker_handoff is not allowed for agy (no enforced write boundary)")
+        slot = handoff_slot(root, s["agent"], s["task_id"])
+        if (root / slot).exists():
+            raise CrewError(EXIT_GUARD, f"handoff file already exists: {slot}")
+        (root / slot).parent.mkdir(parents=True, exist_ok=True)
+        s["handoff_slot"] = slot
+        s["cli_mode"] = "write"
     scan = safety.scan_instructions(safety.instruction_dirs(root, Path.cwd(), s.get("write_paths") or []))
     if scan["privacy"] and not approve_data_sharing:
         raise CrewError(EXIT_GUARD, "project instructions mention personal/sensitive data; delegation sends content to "
@@ -311,6 +360,7 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
         "allow_subagents": s["allow_subagents"], "ephemeral": s["ephemeral"],
         "timeout_min": s["timeout_min"], "max_retries": s["max_retries"], "retry_of": s.get("retry_of"),
         "plan": s.get("plan"), "plan_step": s.get("plan_step"),
+        "worker_handoff": bool(s.get("worker_handoff")), "handoff_slot": s.get("handoff_slot"), "handoff_written": None,
         "crew_pid": os.getpid(), "crew_create_time": procutil.create_time(os.getpid()),
         "worker_pid": None, "worker_create_time": None,
         "started": started, "started_epoch": time.time(), "ended": None, "duration_s": None,

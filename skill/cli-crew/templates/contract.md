@@ -12,6 +12,7 @@ timeout_min: 20
 max_retries: 1
 retry_of: null
 ephemeral: false
+worker_handoff: false
 plan: null
 plan_step: null
 ---

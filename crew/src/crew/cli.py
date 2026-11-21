@@ -327,6 +327,8 @@ def summarize(state: dict[str, Any], runs: Any = None) -> list[str]:
     lines.append(f"worker_status: {state.get('worker_status')}")
     v = state.get("boundary_violations") or []
     lines.append(f"boundary violations: {len(v)}" + (": " + ", ".join(f"{x['kind']} {x['path']}" for x in v[:10]) if v else ""))
+    if state.get("worker_handoff"):
+        lines.append(f"worker handoff: {state.get('handoff_slot')} ({'written' if state.get('handoff_written') else 'NOT written'})")
     if state.get("boundary_check"):
         lines.append(f"boundary check: {state['boundary_check']}")
     lines.append(f"subagent used: {state.get('subagent_used')} (violation={state.get('subagent_violation')})")
@@ -487,7 +489,10 @@ def recheck(root: Path, runs: st.Runs, s: dict[str, Any]) -> dict[str, Any]:
         after = read_json(runs.file(f"{s['task_id']}.snap.after.json"))
         changes = snapshot.diff(before, after, root)
         wp = [root / p for p in s.get("write_paths", [])]
-        out["boundary_violations"] = snapshot.violations(changes, s["mode"], wp, root)
+        if s.get("worker_handoff"):
+            out["boundary_violations"] = runner.handoff_violations(runs, changes, s, root)
+        else:
+            out["boundary_violations"] = snapshot.violations(changes, s["mode"], wp, root)
     except (OSError, ValueError, KeyError):
         out["boundary_violations"] = "UNKNOWN"
     return out

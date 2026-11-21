@@ -301,6 +301,53 @@ class AdapterTests(Base):
 
 # ------------------------------------------------------------ run end-to-end
 
+class WorkerHandoffTests(Base):
+    def run_handoff(self, scenario, agent="codex", tid="T-h1"):
+        os.environ["FAKE_SCENARIO"] = scenario
+        p = self.contract(tid=tid, agent=agent)
+        p.write_text(p.read_text(encoding="utf-8").replace("ephemeral: false", "ephemeral: false\nworker_handoff: true"),
+                     encoding="utf-8")
+        code, out, err = crew("run", "--contract", str(p))
+        return code, self.runs.load_state(tid) or {}, out + err
+
+    def test_slot_written_is_not_a_violation(self):
+        code, s, out = self.run_handoff("write_handoff")
+        self.assertEqual(code, 0, (s, out))
+        self.assertTrue(s["handoff_written"])
+        self.assertEqual(s["boundary_violations"], [])
+        self.assertEqual(s["mode"], "read")
+        self.assertTrue((self.root / s["handoff_slot"]).is_file())
+        self.assertIn("worker handoff:", out)
+
+    def test_other_file_is_still_a_violation(self):
+        code, s, _ = self.run_handoff("write_outside")
+        self.assertEqual(code, 11)
+        self.assertEqual([v["path"] for v in s["boundary_violations"]], ["outside.txt"])
+
+    def test_missing_handoff_is_reported(self):
+        code, s, out = self.run_handoff("done")
+        self.assertEqual(code, 0, (s, out))
+        self.assertFalse(s["handoff_written"])
+        self.assertIn("NOT written", out)
+
+    def test_agy_refused(self):
+        os.environ["FAKE_SCENARIO"] = "done"
+        p = self.contract(tid="T-h2", agent="agy")
+        p.write_text(p.read_text(encoding="utf-8").replace("ephemeral: false", "ephemeral: false\nworker_handoff: true"),
+                     encoding="utf-8")
+        code, out, err = crew("contract", "check", str(p))
+        self.assertNotEqual(code, 0)
+        self.assertIn("agy", out + err)
+
+    def test_requires_read_mode_and_no_add_dirs(self):
+        p = self.contract(tid="T-h3", mode="write", wp="[src]")
+        p.write_text(p.read_text(encoding="utf-8").replace("ephemeral: false", "ephemeral: false\nworker_handoff: true"),
+                     encoding="utf-8")
+        code, out, err = crew("contract", "check", str(p))
+        self.assertNotEqual(code, 0)
+        self.assertIn("worker_handoff", out + err)
+
+
 class RunTests(Base):
     def test_done(self):
         code, s = self.run_task("done")

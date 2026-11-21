@@ -92,7 +92,7 @@ def agy_file_instruction(prompt_rel: str) -> str:
 
 def build(agent: str, s: dict[str, Any], *, root: Path, add_dirs: list[Path], prompt_text: str,
           prompt_rel: str, result_path: Path, cfg: dict[str, Any]) -> Invocation:
-    mode = s["mode"]
+    mode = s.get("cli_mode") or s["mode"]
     effort = s["effort"]
     model = s.get("model")
     prefix = binary_prefix(agent)

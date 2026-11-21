@@ -18,6 +18,7 @@ Source of truth: `docs/SPEC.md` (v1.0) in the cli-crew repository. This is a con
 | max_retries | 0 or 1 | retry only on transient errors, never after partial writes or usage limits |
 | retry_of | previous REJECTED task id | chain limited to two rejections |
 | ephemeral | true/false | codex only; requires allow_subagents=true |
+| worker_handoff | true/false | worker writes its own handoff file (`handoffs/<date>/<time>-<agent>-<task>.md`); codex/claude, mode=read, no add_dirs; runs in parallel with reads |
 | plan | plan id or null | set together with plan_step; the plan must pass `crew plan check` |
 | plan_step | step id or null | must exist in the plan; a different executor in the plan is a warning |
 
