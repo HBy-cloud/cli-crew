@@ -48,6 +48,18 @@ NEXT: <what the main agent should do>
 """
 
 
+REVIEW_RULE = """You are a REVIEWER. Check the work independently against the "Done when" criteria of the reviewed work. Do not trust the author's claims; read the files and evidence yourself.
+Before the final RESULT block, add this block (RESULT stays last):
+
+## REVIEW
+VERDICT: PASS | FAIL | PARTIAL
+CRITERIA:
+- <each Done-when criterion>: met | unmet | unverified, with evidence (file:line or what you ran)
+FINDINGS: defects found, most severe first, or "none"
+
+"""
+
+
 class Cancelled(Exception):
     pass
 
@@ -65,7 +77,10 @@ def build_prompt(s: dict[str, Any], contract_body: str) -> str:
         mode_rule = "This is a READ-ONLY task: do not modify, create, or delete any file."
     else:
         mode_rule = "Modify files ONLY under these paths (relative to the working directory): " + ", ".join(s["write_paths"])
-    return HEADER.format(subagent_rule=sub, mode_rule=mode_rule) + contract_body.strip() + "\n"
+    header = HEADER.format(subagent_rule=sub, mode_rule=mode_rule)
+    if s.get("task_kind") == "review":
+        header = header.replace("# TASK CONTRACT", REVIEW_RULE + "# TASK CONTRACT")
+    return header + contract_body.strip() + "\n"
 
 
 def agy_settings_rules(root: Path, s: dict[str, Any]) -> list[str]:
@@ -300,6 +315,12 @@ def finalize(runs: st.Runs, state: dict[str, Any], *, root: Path, write_paths_ab
         else:
             state["subagent_used"] = "UNKNOWN"
         state["subagent_violation"] = bool(state["subagent_used"] is True and not state.get("allow_subagents"))
+        if state.get("task_kind") == "review" and state.get("attempts"):
+            try:
+                rv = classify.parse_review_block(read_text(_attempt_files(runs, tid, len(state["attempts"]))["result"]))
+                state["review_verdict"], state["review_criteria"] = rv["verdict"] or "MISSING", rv["criteria"]
+            except OSError:
+                state["review_verdict"], state["review_criteria"] = "MISSING", 0
         paths: list[str] = []
         for a in state.get("attempts", []):
             for p in a.get("session_paths", []):

@@ -92,13 +92,13 @@ class PlanTests(PlanHelpers, Base):
         rows = ROWS.replace("| S3 | todo |", "| S3 | dropped |")
         self.write_plan(rows=rows)
         code, out, _ = crew("plan", "check", "P1", "--json")
-        self.assertIn("Revisions", " ".join(json.loads(out)["warnings"]))
+        self.assertIn("Revisions table has no entry", " ".join(json.loads(out)["warnings"]))
         path = self.runs.plan_path("P1")
         extra = ["", "## Revisions", "| date | change | reason or evidence |", "| --- | --- | --- |",
                  "| 2026-11-21 | dropped S3 | the review found nothing to fix |", ""]
         path.write_text(path.read_text(encoding="utf-8") + "\n".join(extra), encoding="utf-8")
         code, out, _ = crew("plan", "check", "P1", "--json")
-        self.assertNotIn("Revisions", " ".join(json.loads(out)["warnings"]))
+        self.assertNotIn("Revisions table has no entry", " ".join(json.loads(out)["warnings"]))
 
     def test_blocked_step_is_valid_and_not_ready_and_blocks_done(self):
         rows = ROWS.replace("| S2 | todo |", "| S2 | blocked |")
@@ -179,7 +179,7 @@ class PlanTests(PlanHelpers, Base):
         self.assertIn("S2: has an accepted run but is marked todo", view["notes"])
         self.write_plan(rows=ROWS.replace("| S2 | todo |", "| S2 | done |"))
         view = json.loads(crew("plan", "show", "P1", "--json")[1])
-        self.assertEqual((view["ready"], view["notes"]), (["S3"], []))
+        self.assertEqual((view["ready"], [n for n in view["notes"] if "no reviewer step" not in n]), (["S3"], []))
         self.write_plan(rows=ROWS.replace("| S2 | todo | crew:codex/default/low |", "| S2 | done | crew:claude |")
                         .replace("| S3 | todo | main |", "| S3 | done | crew:agy |"))
         notes = json.loads(crew("plan", "show", "P1", "--json")[1])["notes"]
@@ -299,3 +299,68 @@ class ContainmentTests(Base):
         code, _, err = crew("contract", "new", "T-9")
         self.assertEqual(code, 3)
         self.assertEqual(list(self.outside.iterdir()), [])
+
+
+PLAN7 = """---
+plan_id: P2
+status: active
+---
+## Goal
+Fix the bug and have it reviewed independently.
+
+## Steps
+| step | status | executor | depends_on | task | verify | reviews |
+| --- | --- | --- | --- | --- | --- | --- |
+| S1 | done | crew:codex | - | Implement the fix | tests pass | - |
+| R1 | todo | crew:codex | S1 | Review S1 | PASS verdict | S1 |
+| R2 | todo | main | S1 | Review S1 | PASS verdict | S1 |
+| S3 | todo | crew:claude | R1 | Write the report | file exists | - |
+
+## Approvals
+- none
+"""
+
+
+class ReviewerTests(PlanHelpers, Base):
+    def warnings(self, pid="P2"):
+        code, out, _ = crew("plan", "check", pid, "--json")
+        return json.loads(out)["warnings"]
+
+    def test_reviewer_rules(self):
+        self.runs.ensure()
+        path = self.runs.plan_path("P2")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(PLAN7, encoding="utf-8")
+        text = " | ".join(self.warnings())
+        self.assertIn("step R1: the reviewer uses the same CLI (codex) as the author of S1", text)
+        self.assertIn("step R2: the reviewer is main itself", text)
+        self.assertIn("step S3 has no reviewer step", text)
+        self.assertNotIn("step S1 has no reviewer step", text)
+        path.write_text(PLAN7.replace("## Approvals", "## Revisions\n| date | change | reason or evidence |\n| --- | --- | --- |\n"
+                                      "| 2026-11-21 | S3 review skipped | trivial report, the user reads it | \n\n## Approvals"),
+                        encoding="utf-8")
+        self.assertNotIn("step S3 has no reviewer step", " | ".join(self.warnings()))
+
+    def test_review_block_parse(self):
+        from crew import classify
+        txt = "## REVIEW\nVERDICT: PARTIAL\nCRITERIA:\n- a: met (x)\n- b: unmet\n- c: unverified\nFINDINGS: none\n\n## RESULT\nSTATUS: success\n"
+        self.assertEqual(classify.parse_review_block(txt), {"verdict": "PARTIAL", "criteria": 3})
+        self.assertEqual(classify.parse_review_block("no block"), {"verdict": None, "criteria": 0})
+
+    def test_review_kind_gets_the_reviewer_prompt_and_verdict(self):
+        os.environ["FAKE_SCENARIO"] = "review_pass"
+        p = self.contract(tid="T-r1")
+        p.write_text(p.read_text(encoding="utf-8").replace("ephemeral: false", "ephemeral: false\ntask_kind: review"), encoding="utf-8")
+        code, out, _ = crew("run", "--contract", str(p))
+        self.assertEqual(code, 0, out)
+        s = self.runs.load_state("T-r1")
+        self.assertEqual((s["review_verdict"], s["review_criteria"]), ("PASS", 2))
+        self.assertIn("review verdict: PASS (2 criteria lines)", out)
+        self.assertIn("You are a REVIEWER", (self.runs.dir / "T-r1.prompt.md").read_text(encoding="utf-8"))
+
+    def test_review_without_block_is_missing(self):
+        os.environ["FAKE_SCENARIO"] = "done"
+        p = self.contract(tid="T-r2")
+        p.write_text(p.read_text(encoding="utf-8").replace("ephemeral: false", "ephemeral: false\ntask_kind: review"), encoding="utf-8")
+        code, out, _ = crew("run", "--contract", str(p))
+        self.assertIn("review verdict: MISSING", out)

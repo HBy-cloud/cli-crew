@@ -39,6 +39,17 @@ def last_result_block(text: str) -> str | None:
     return text[last:].strip() if last is not None else None
 
 
+def parse_review_block(text: str) -> dict[str, Any]:
+    """Reviewer output: '## REVIEW' block with VERDICT (PASS | FAIL | PARTIAL) and per-criterion lines (met | unmet | unverified)."""
+    m = re.search(r"(?ms)^## REVIEW[ \t]*\r?$(.*?)(?=^## |\Z)", text)
+    if not m:
+        return {"verdict": None, "criteria": 0}
+    block = m.group(1)
+    v = re.search(r"(?m)^\s*VERDICT\s*:\s*(PASS|FAIL|PARTIAL)\b", block)
+    crit = [ln for ln in block.splitlines() if re.search(r"(?i)\b(unmet|unverified|met)\b", ln) and not re.match(r"\s*VERDICT", ln)]
+    return {"verdict": v.group(1) if v else None, "criteria": len(crit)}
+
+
 def parse_result_block(text: str) -> dict[str, Any]:
     """Last '## RESULT' block (header included) and its fields."""
     block = last_result_block(text)

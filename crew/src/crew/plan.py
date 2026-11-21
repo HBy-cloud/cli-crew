@@ -14,6 +14,7 @@ STEP_ID_RE = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$"
 PLAN_STATUSES = ("active", "done", "abandoned")
 STEP_STATUSES = ("todo", "doing", "blocked", "done", "dropped")
 COLUMNS = ("step", "status", "executor", "depends_on", "task", "verify")
+COLUMNS_REVIEW = COLUMNS + ("reviews",)
 EXECUTOR_HELP = "main | main-subagent | crew:<agent>[/<model or default>[/<effort>]]"
 EXECUTOR_RE = re.compile(r"^(main|main-subagent|crew:(" + "|".join(AGENTS) + r")(/[^/\s|]+){0,2})$")
 
@@ -25,13 +26,17 @@ status: active
 TODO: the outcome the user asked for and how main will verify it. This cplan covers the WHOLE task, including steps main does itself.
 
 ## Steps
-| step | status | executor | depends_on | task | verify |
-| --- | --- | --- | --- | --- | --- |
-| S1 | todo | main | - | TODO | TODO |
+| step | status | executor | depends_on | task | verify | reviews |
+| --- | --- | --- | --- | --- | --- | --- |
+| S1 | todo | main | - | TODO | TODO | - |
+| R1 | todo | crew:codex/default/low | S1 | Independent review of S1 against its verify criteria | PASS verdict with evidence per criterion | S1 |
 
 <!-- status: todo | doing | blocked | done | dropped
      executor: {executors}
      depends_on: step ids separated by commas, or -
+     reviews: ids of the steps this step reviews (a reviewer step), or -. Every deliverable needs a reviewer step
+              (executor: another CLI than the author), or a Revisions row that says why the review is skipped. -->
+<!--
      Do not use '|' inside a cell. -->
 
 ## Revisions
@@ -53,6 +58,7 @@ class Step:
     depends_on: list[str]
     task: str
     verify: str
+    reviews: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -102,21 +108,26 @@ def _parse_steps(text: str) -> tuple[list[Step], list[str]]:
     steps: list[Step] = []
     errors: list[str] = []
     rows = [l for l in text.splitlines() if l.strip().startswith("|")]
-    if rows and tuple(c.lower() for c in _cells(rows[0])) != COLUMNS:
-        errors.append(f"steps table must start with the header: | {' | '.join(COLUMNS)} |")
+    head = tuple(c.lower() for c in _cells(rows[0])) if rows else ()
+    with_reviews = head == COLUMNS_REVIEW
+    if rows and head not in (COLUMNS, COLUMNS_REVIEW):
+        errors.append(f"steps table must start with the header: | {' | '.join(COLUMNS)} | (optional last column: reviews)")
     for n, line in enumerate(rows):
         cells = _cells(line)
-        if n == 0 and tuple(c.lower() for c in cells) == COLUMNS:
+        if n == 0 and tuple(c.lower() for c in cells) in (COLUMNS, COLUMNS_REVIEW):
             continue
         if all(re.fullmatch(r":?-{3,}:?", c) for c in cells if c):
             continue
-        if len(cells) != len(COLUMNS):
+        want = len(COLUMNS_REVIEW) if with_reviews else len(COLUMNS)
+        if len(cells) != want:
             first = redact(cells[0]) if cells else ""
-            errors.append(f"steps row must have {len(COLUMNS)} cells (row starting '{first}')")
+            errors.append(f"steps row must have {want} cells (row starting '{first}')")
             continue
-        sid, status, executor, deps, task, verify = cells
+        sid, status, executor, deps, task, verify = cells[:6]
+        rev = cells[6] if with_reviews else "-"
         dep_list = [] if deps in ("", "-") else [d.strip() for d in deps.split(",") if d.strip()]
-        steps.append(Step(sid, status.lower(), executor, dep_list, task, verify))
+        rev_list = [] if rev in ("", "-") else [d.strip() for d in rev.split(",") if d.strip()]
+        steps.append(Step(sid, status.lower(), executor, dep_list, task, verify, rev_list))
     return steps, errors
 
 
@@ -161,6 +172,36 @@ def _cycle(steps: list[Step]) -> list[str] | None:
             if found:
                 return found
     return None
+
+
+def _review_warnings(plan: Plan) -> list[str]:
+    """Reviewer rules (D-28): every deliverable has an independent reviewer step, or a Revisions row says why not."""
+    out: list[str] = []
+    by_id = {s.step: s for s in plan.steps}
+    reviewed: set[str] = set()
+    for r in plan.steps:
+        for target in r.reviews:
+            t = by_id.get(target)
+            if t is None or target == r.step:
+                out.append(f"step {r.step}: reviews unknown or own step '{target}'")
+                continue
+            reviewed.add(target)
+            if r.executor == "main":
+                out.append(f"step {r.step}: the reviewer is main itself, so the review of {target} is not independent")
+            ra, ta = executor_agent(r.executor), executor_agent(t.executor)
+            if ra and ra == ta:
+                out.append(f"step {r.step}: the reviewer uses the same CLI ({ra}) as the author of {target}")
+    dependents = {d for s in plan.steps for d in s.depends_on}
+    rev_text = plan.sections.get("Revisions", "")
+    for s in plan.steps:
+        if s.reviews or s.status == "dropped":
+            continue
+        deliverable = s.step not in dependents or (executor_agent(s.executor) is not None)
+        if deliverable and s.step not in reviewed:
+            skipped = any(s.step in ln and re.search(r"(?i)review|리뷰|검증", ln) for ln in rev_text.splitlines())
+            if not skipped:
+                out.append(f"step {s.step} has no reviewer step (add one with the reviews column, or record in Revisions why the review is skipped)")
+    return out
 
 
 def _handoff_missing(plan: Plan) -> bool:
@@ -230,6 +271,7 @@ def validate(plan: Plan) -> tuple[list[str], list[str]]:
         if open_steps:
             warnings.append(f"plan is done but steps are still open: {', '.join(open_steps)}")
 
+    warnings.extend(_review_warnings(plan))
     if _handoff_missing(plan):
         warnings.append("NOTE: the plan is stopped (abandoned or a step is blocked) but no handoff is newer than it; run `crew handoff` and fill it in")
     rev_rows = [ln for ln in plan.sections.get("Revisions", "").splitlines() if ln.strip().startswith("|")]

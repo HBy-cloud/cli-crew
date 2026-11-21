@@ -335,6 +335,8 @@ def summarize(state: dict[str, Any], runs: Any = None) -> list[str]:
     if warning:
         lines.append(f"VERSION WARNING: {warning}")
     lines.append(f"worker_status: {state.get('worker_status')}")
+    if state.get("task_kind") == "review":
+        lines.append(f"review verdict: {state.get('review_verdict') or 'n/a'} ({state.get('review_criteria') or 0} criteria lines)")
     if not state.get("plan") and runs is not None and not _has_active_cplan(runs):
         lines.append("NOTE: no active cplan; write one with `crew plan new` before delegating (SKILL: cplan first)")
     v = state.get("boundary_violations") or []

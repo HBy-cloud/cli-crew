@@ -47,6 +47,8 @@ elif scenario == "write_handoff":
     import re
     m = re.search(r"(handoffs?/\d{4}-\d{2}-\d{2}/\S+\.md)", prompt)
     Path(m.group(1)).write_text("# handoff\n", encoding="utf-8")
+elif scenario == "review_pass":
+    text = "## REVIEW\nVERDICT: PASS\nCRITERIA:\n- tests pass: met (ran unittest)\n- docs updated: unverified\nFINDINGS: none\n\n" + RESULT_OK
 elif scenario == "write_inside":
     Path("src").mkdir(exist_ok=True)
     Path("src/a.txt").write_text("hello", encoding="utf-8")

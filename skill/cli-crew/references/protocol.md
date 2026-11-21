@@ -32,6 +32,7 @@ Sections: `## Goal` (outcome and how main verifies it), `## Steps` table, `## Ap
 |---|---|
 | step | `^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$`, unique |
 | status | todo, doing, blocked, done, dropped |
+| reviews | optional 7th column: ids of the steps a reviewer step checks (D-28) |
 | executor | main, main-subagent, `crew:<agent>[/<model or default>[/<effort>]]` |
 | depends_on | comma-separated step ids, or `-`; no cycles |
 | task, verify | concrete text; not empty or TODO |
@@ -86,3 +87,15 @@ Use `crew compare <ID> <ID> [--json]` to inspect verification evidence, violatio
 
 `.agent-runs/` (self-gitignored): contracts, state JSON, prompts, per-attempt logs/events/results,
 snapshots, subagent evidence, `history.jsonl` (permanent id registry), `locks/`.
+
+## Reviewer result (task_kind: review)
+crew adds the reviewer rule to the worker prompt. The worker puts this block before the final RESULT block:
+
+```
+## REVIEW
+VERDICT: PASS | FAIL | PARTIAL
+CRITERIA:
+- <each Done-when criterion>: met | unmet | unverified, with evidence (file:line or what it ran)
+FINDINGS: defects found, most severe first, or "none"
+```
+The run summary shows `review verdict: <X> (<n> criteria lines)`; a missing block is `MISSING`. Main checks the evidence itself.
