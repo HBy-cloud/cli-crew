@@ -847,7 +847,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--approve-data-sharing", action="store_true",
                     help="user confirmed sending this project's content to the worker's provider")
     sp.add_argument("--allow-unbounded-write", action="store_true",
-                    help="deprecated; agy write tasks are refused")
+                    help="deprecated and ignored")
     sp.add_argument("--with-result", action="store_true", help="include the saved worker result in the run output")
     add_json(sp)
     sp.set_defaults(func=cmd_run)

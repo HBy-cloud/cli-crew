@@ -115,6 +115,8 @@ def build(agent: str, s: dict[str, Any], *, root: Path, add_dirs: list[Path], pr
         if model:
             args += ["--model", model]
         args += ["--output-format", "stream-json", "--print-timeout", f"{s['timeout_min']}m"]
+        if s.get("agy_settings"):
+            args += ["--settings", str(s["agy_settings"])]
         if mode == "read":
             for d in add_dirs:
                 args += ["--add-dir", str(d)]

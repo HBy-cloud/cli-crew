@@ -334,8 +334,6 @@ def validate(c: Contract, s: dict[str, Any], root: Path, runs: Runs, cfg: dict[s
     if s.get("worker_handoff") is True:
         if mode != "read":
             errors.append("worker_handoff=true is only for mode=read (a write task may list its handoff file in write_paths)")
-        if agent == "agy":
-            errors.append("worker_handoff=true is not allowed for agy (it does not enforce write boundaries)")
         if s.get("add_dirs"):
             errors.append("worker_handoff=true cannot be combined with add_dirs (the worker runs with write access)")
     if s.get("ephemeral"):

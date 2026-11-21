@@ -84,7 +84,7 @@ When delegation is a realistic option, run `crew routing --kind <investigate|imp
 For each delegated task, choose the CLI, model and reasoning effort together. Use a supported model ID or deliberately select the CLI default (`model: null`). Set the effort in the contract and give a one-line reason based on difficulty, cost and verification needs. Facts to weigh:
 - claude `--restricted` write mode: edits confined to the project, no shell; `crew` names the allowed `write_paths` and checks changes against them.
 - codex: rejects writes outside the project; no shell in sandbox.
-- agy: does **not** enforce write boundaries. use agy only for read tasks.
+- agy: crew confines it to the project with `--settings` (no outside writes, no overwrite of unlisted files) but cannot stop new files inside the project; check the boundary report.
 - No worker is prevented from *reading* secret files except claude `--restricted` (limited to the project and
   `add_dirs`). For sensitive projects prefer claude.
 - A different model than the author is best for independent review.
@@ -96,8 +96,8 @@ For each delegated task, choose the CLI, model and reasoning effort together. Us
    - `add_dirs` (outside read paths) only in read mode. Need outside material for a write task? Split it.
    - `allow_subagents: true` only for a broad read investigation across several independent areas; otherwise false.
      Codex token counts cover the worker's main thread, so they can understate subagent use.
-   - `worker_handoff: true` for codex and claude read workers: the worker writes its own handoff (purpose, decisions and why, 
-     verification, unfinished, next) to a file crew names, and still runs in parallel. agy cannot; ask it for its reasoning in Done when.
+   - `worker_handoff: true` for read workers (codex, claude, agy): the worker writes its own handoff (purpose, decisions and why, 
+     verification, unfinished, next) to a file crew names, and still runs in parallel. Check its `worker handoff:` line.
    - `effort: low` by default; `medium` if needed. `high`+ needs user approval (see 4).
    - Re-delegating a rejected task: new TASK_ID with `retry_of: <old id>`.
 3. `run` validates the contract before launch. Use `crew contract check <file>` for a separate preflight when needed. Never put secrets in a contract.
@@ -109,7 +109,7 @@ For each delegated task, choose the CLI, model and reasoning effort together. Us
 - Exit 3 is a guard; read the message and act on its cause. Never add an approval flag the message did not ask for.
   "cost approval required": ask the user; only then add `--approve-cost`.
   Sensitive data: ask the user (see 1-5); only then add `--approve-data-sharing`.
-  "REJECTED twice": stop re-delegating and report to the user. agy write refused: use codex or claude.
+  "REJECTED twice": stop re-delegating and report to the user. agy `PARTIAL` after denied writes: read its report and the boundary result.
 - Exit 4: another task is active; `crew status` shows it. Wait or run sequentially. Exit 5: use a new TASK_ID.
 - Never use bypass flags; `crew` refuses them by design.
 

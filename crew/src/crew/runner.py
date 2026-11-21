@@ -68,6 +68,37 @@ def build_prompt(s: dict[str, Any], contract_body: str) -> str:
     return HEADER.format(subagent_rule=sub, mode_rule=mode_rule) + contract_body.strip() + "\n"
 
 
+def agy_settings_rules(root: Path, s: dict[str, Any]) -> list[str]:
+    """write_file allow rules for agy: only the contract's write paths or the worker handoff file."""
+    if s.get("handoff_slot"):
+        paths = [s["handoff_slot"]]
+    elif s["mode"] == "write":
+        paths = list(s.get("write_paths") or [])
+    else:
+        paths = []
+    rules = []
+    for p in paths:
+        q = str(p).replace("\\", "/")
+        if (root / q).is_dir() and not q.endswith("/"):
+            q += "/"
+        rules.append(f"write_file({q})")
+    return rules
+
+
+def write_agy_settings(runs: st.Runs, root: Path, s: dict[str, Any]) -> Path:
+    """Per-session agy settings: confine file tools to the workspace and allow writes only to the contract paths.
+
+    Verified on agy 1.5.14: --settings overrides the user's allowNonWorkspaceAccess, and headless mode auto-denies
+    a write_file call that has no allow rule. New files inside the workspace are not prevented; the snapshot check still reports them.
+    """
+    import json as _json
+
+    path = runs.file(f"{s['task_id']}.agy-settings.json")
+    atomic_write_text(path, _json.dumps({"allowNonWorkspaceAccess": False,
+                                         "permissions": {"allow": agy_settings_rules(root, s)}}, indent=2) + "\n")
+    return path
+
+
 def handoff_slot(root: Path, agent: str, task_id: str) -> str:
     """Relative path of the handoff file a worker may write (worker_handoff=true)."""
     base = "handoffs"
@@ -325,11 +356,7 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
         raise CrewError(EXIT_USAGE, "agent not set (contract or --agent)")
     if os.environ.get("AGENT_ROLE") == "WORKER":
         raise CrewError(EXIT_GUARD, "refusing to delegate from inside a WORKER (AGENT_ROLE=WORKER)")
-    if s["agent"] == "agy" and s["mode"] == "write":
-        raise CrewError(EXIT_GUARD, "agy does not enforce write boundaries; use a write-capable isolated worker")
     if s.get("worker_handoff"):
-        if s["agent"] == "agy":
-            raise CrewError(EXIT_GUARD, "worker_handoff is not allowed for agy (no enforced write boundary)")
         slot = handoff_slot(root, s["agent"], s["task_id"])
         if (root / slot).exists():
             raise CrewError(EXIT_GUARD, f"handoff file already exists: {slot}")
@@ -417,6 +444,9 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
             prompt_path = runs.file(f"{tid}.prompt.md")
             atomic_write_text(prompt_path, prompt)
             _add_file(state, f"{tid}.prompt.md")
+            if s["agent"] == "agy":
+                s["agy_settings"] = str(write_agy_settings(runs, root, s))
+                _add_file(state, f"{tid}.agy-settings.json")
             runs.save_state(state)
 
             max_attempts = 1 + int(s["max_retries"])

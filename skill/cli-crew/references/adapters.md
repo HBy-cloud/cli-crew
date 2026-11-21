@@ -16,7 +16,7 @@ print a VERSION WARNING when an installed CLI differs. Update both places togeth
   auto-denies commands; claude `--restricted` has no shell). Main runs tests/builds.
 - Exit code 0 does not mean success. agy prints `jetski: no output produced ... auto-denied` with exit 0.
 - `--add-dir` grants write access in codex/claude write modes, so crew forbids it in write mode.
-- agy can write outside cwd in accept-edits mode. Crew refuses agy write tasks before launch.
+- agy writes outside cwd under the default config. Crew passes a per-session `--settings` file (`allowNonWorkspaceAccess: false`, `write_file` allow rules only for the contract's write paths or handoff file). Verified on 1.5.14: outside writes and overwrites of unlisted files are auto-denied; creating new files inside the workspace is not prevented (the snapshot check reports it).
 - All three can spawn built-in subagents non-interactively; codex cannot disable it via flags.
   crew detects use: codex child rollouts (`parent_thread_id`), agy `invoke_subagent` steps,
   claude `subagent_stats.spawned`.

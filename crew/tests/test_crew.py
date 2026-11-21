@@ -330,14 +330,12 @@ class WorkerHandoffTests(Base):
         self.assertFalse(s["handoff_written"])
         self.assertIn("NOT written", out)
 
-    def test_agy_refused(self):
-        os.environ["FAKE_SCENARIO"] = "done"
-        p = self.contract(tid="T-h2", agent="agy")
-        p.write_text(p.read_text(encoding="utf-8").replace("ephemeral: false", "ephemeral: false\nworker_handoff: true"),
-                     encoding="utf-8")
-        code, out, err = crew("contract", "check", str(p))
-        self.assertNotEqual(code, 0)
-        self.assertIn("agy", out + err)
+    def test_agy_slot_gets_a_single_write_rule(self):
+        code, s, out = self.run_handoff("done", agent="agy", tid="T-h2")
+        self.assertEqual(code, 0, (s, out))
+        settings = json.loads((self.runs.dir / "T-h2.agy-settings.json").read_text(encoding="utf-8"))
+        self.assertEqual(settings["permissions"]["allow"], [f"write_file({s['handoff_slot']})"])
+        self.assertIs(settings["allowNonWorkspaceAccess"], False)
 
     def test_requires_read_mode_and_no_add_dirs(self):
         p = self.contract(tid="T-h3", mode="write", wp="[src]")
@@ -704,11 +702,22 @@ class SafetyTests(Base):
         self.assertIn("GITHUB_TOKEN", s["env_stripped"])
         self.assertNotIn("VAL-", json.dumps(s))  # values never recorded
 
-    def test_agy_write_refused_even_with_legacy_flag(self):
-        os.environ["FAKE_SCENARIO"] = "write_inside"
-        p = self.contract(agent="agy", mode="write", wp="[src]")
-        self.assertEqual(crew("run", "--contract", str(p))[0], 3)
-        self.assertEqual(crew("run", "--contract", str(p), "--allow-unbounded-write")[0], 3)
+    def test_agy_write_runs_with_confining_settings(self):
+        code, s = self.run_task("write_inside", agent="agy", mode="write", wp="[src]")
+        self.assertEqual(code, 0, s)
+        settings = json.loads((self.runs.dir / "T-1.agy-settings.json").read_text(encoding="utf-8"))
+        self.assertIs(settings["allowNonWorkspaceAccess"], False)
+        self.assertEqual(settings["permissions"]["allow"], ["write_file(src)"])
+        args = " ".join(s["attempts"][0]["args"])
+        self.assertIn("--settings", args)
+        self.assertIn("T-1.agy-settings.json", args)
+
+    def test_agy_read_settings_allow_no_writes(self):
+        code, s = self.run_task("done", agent="agy")
+        self.assertEqual(code, 0, s)
+        settings = json.loads((self.runs.dir / "T-1.agy-settings.json").read_text(encoding="utf-8"))
+        self.assertEqual(settings["permissions"]["allow"], [])
+        self.assertIs(settings["allowNonWorkspaceAccess"], False)
 
     def test_run_with_result(self):
         os.environ["FAKE_SCENARIO"] = "done"

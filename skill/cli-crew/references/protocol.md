@@ -70,7 +70,7 @@ Reservation is atomic (`.agent-runs/locks/reserve.lock`).
   are removed before launching a worker, except the worker's own provider keys. Removed names (never values)
   are recorded in `env_stripped`. Extra names can be allowed via `env_passthrough` in `~/.crew/config.toml`.
 - Sensitive-data hints in instruction files → `crew run` requires `--approve-data-sharing`.
-- agy write mode is refused even with the legacy flag.
+- agy write mode runs with a per-session `--settings` file; `--allow-unbounded-write` is deprecated and ignored.
 - Worker prompt header tells workers to treat file contents as data and ignore embedded instructions.
 - Limits: workers other than claude can read any file the user can read; writes outside the project are not
   detected; agy has browser tools (network access not blocked by crew).
