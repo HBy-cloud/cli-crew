@@ -163,6 +163,23 @@ def _cycle(steps: list[Step]) -> list[str] | None:
     return None
 
 
+def _handoff_missing(plan: Plan) -> bool:
+    """True when the plan is stopped (abandoned, or has a blocked step) and no handoff file is newer than the plan file."""
+    status = plan.fields.get("status")
+    if status == "done" or not (status == "abandoned" or any(s.status == "blocked" for s in plan.steps)):
+        return False
+    try:
+        root = plan.path.parents[2]
+        plan_time = plan.path.stat().st_mtime
+        for name in ("handoffs", "handoff"):
+            d = root / name
+            if d.is_dir() and any(f.stat().st_mtime >= plan_time for f in d.rglob("*.md")):
+                return False
+    except (IndexError, OSError):
+        return False
+    return True
+
+
 def validate(plan: Plan) -> tuple[list[str], list[str]]:
     errors: list[str] = list(plan.table_errors)
     warnings: list[str] = []
@@ -213,6 +230,8 @@ def validate(plan: Plan) -> tuple[list[str], list[str]]:
         if open_steps:
             warnings.append(f"plan is done but steps are still open: {', '.join(open_steps)}")
 
+    if _handoff_missing(plan):
+        warnings.append("NOTE: the plan is stopped (abandoned or a step is blocked) but no handoff is newer than it; run `crew handoff` and fill it in")
     rev_rows = [ln for ln in plan.sections.get("Revisions", "").splitlines() if ln.strip().startswith("|")]
     if any(s.status == "dropped" for s in plan.steps) and len(rev_rows) <= 2:
         warnings.append("a step is dropped but the Revisions table has no entry explaining why")

@@ -110,6 +110,24 @@ class PlanTests(PlanHelpers, Base):
         code, out, _ = crew("plan", "check", "P1", "--json")
         self.assertIn("S2", " ".join(json.loads(out)["warnings"]))
 
+    def test_stopped_plan_without_newer_handoff_gets_a_note(self):
+        rows = ROWS.replace("| S2 | todo |", "| S2 | blocked |")
+        path = self.write_plan(rows=rows)
+        old = path.stat().st_mtime - 60
+        os.utime(path, (old, old))
+        code, out, _ = crew("plan", "check", "P1", "--json")
+        self.assertIn("no handoff is newer", " ".join(json.loads(out)["warnings"]))
+        handoff = self.root / "handoffs" / "2026-11-21" / "1200-claude-stopped.md"
+        handoff.parent.mkdir(parents=True)
+        handoff.write_text("# handoff\n", encoding="utf-8")
+        code, out, _ = crew("plan", "check", "P1", "--json")
+        self.assertNotIn("no handoff is newer", " ".join(json.loads(out)["warnings"]))
+        self.write_plan(rows=ROWS)  # active plan with no blocked step: no note
+        os.utime(path, (old, old))
+        handoff.unlink()
+        code, out, _ = crew("plan", "check", "P1", "--json")
+        self.assertNotIn("no handoff is newer", " ".join(json.loads(out)["warnings"]))
+
     def test_run_note_when_no_active_cplan(self):
         os.environ["FAKE_SCENARIO"] = "done"
         code, out, _ = crew("run", "--contract", str(self.contract()))
