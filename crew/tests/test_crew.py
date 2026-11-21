@@ -17,7 +17,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "src"))
 
 from crew import classify, cli, snapshot, state as st  # noqa: E402
-from crew.adapters import Parsed, build, parse  # noqa: E402
+from crew.adapters import Parsed, build, copilot_environment, parse  # noqa: E402
 from crew.common import CrewError  # noqa: E402
 from crew.subagents import verify_codex_rollout_for_delete  # noqa: E402
 
@@ -84,7 +84,7 @@ class Base(unittest.TestCase):
         self.old_cwd = os.getcwd()
         os.chdir(self.root)
         self.env_backup = dict(os.environ)
-        for a in ("codex", "agy", "claude"):
+        for a in ("codex", "agy", "claude", "copilot"):
             os.environ[f"CREW_BIN_{a.upper()}"] = json.dumps(FAKE + [a])
         os.environ["CREW_CONFIG"] = str(self.root / "no-config.toml")
         os.environ.pop("AGENT_ROLE", None)
@@ -305,6 +305,80 @@ class AdapterTests(Base):
                 self.assertNotIn("bypassPermissions", joined)
                 if mode == "write":
                     self.assertNotIn("--add-dir", joined)
+
+    def test_copilot_contract_and_tool_scope(self):
+        (self.root / "nested").mkdir()
+        p = self.contract(agent="copilot", mode="write", wp="[README.md]")
+        self.assertEqual(crew("contract", "check", str(p))[0], 0)
+        for fields in (
+            {"mode": "read"},
+            {"wp": "[nested]"},
+            {"wp": "[missing.py]"},
+            {"wp": "[README.md, nested]"},
+            {"wp": "[README.md]", "effort": "medium"},
+        ):
+            options = {"mode": "write", **fields}
+            with self.subTest(options=options):
+                p = self.contract(agent="copilot", **options)
+                self.assertEqual(crew("contract", "check", str(p))[0], 2)
+
+        target = self.root / "file[1].py"
+        target.touch()
+        settings = {"mode": "write", "effort": "low", "copilot_target": target}
+        inv = build("copilot", settings, root=self.root, add_dirs=[], prompt_text="Text mentions --yolo.",
+                    prompt_rel="", result_path=self.root / "result", cfg={})
+        rule = f"--allow-tool=write({self.root.as_posix()}/file[[]1[]].py)"
+        self.assertIn(rule, inv.args)
+        self.assertIn("--deny-tool=shell", inv.args)
+        self.assertIn("--deny-tool=read(.env*)", inv.args)
+        self.assertIn("--disable-builtin-mcps", inv.args)
+        self.assertEqual(inv.args[-2:], ["-p", "Text mentions --yolo."])
+        self.assertNotIn("--allow-all", inv.args)
+
+    def test_copilot_permission_denial_is_structured(self):
+        events = self.root / "events"
+        stderr = self.root / "stderr"
+        result = self.root / "result"
+        base = [
+            {"type": "session.start", "data": {"sessionId": "x"}},
+            {"type": "assistant.message", "data": {"content": "## RESULT\nSTATUS: success\n",
+                                                    "model": "example"}},
+        ]
+        for events_tail, expected in (
+            ([{"type": "assistant.message", "data": {"content": "permission denied\n## RESULT\nSTATUS: success\n"}},
+              {"type": "result", "exitCode": 0}], "DONE"),
+            ([{"type": "tool.execution_complete", "data": {"success": False, "error": {"code": "denied"}}},
+              {"type": "result", "exitCode": 0}], "BLOCKED"),
+            ([{"type": "result", "exitCode": 1}], "FAILED"),
+            ([], "FAILED"),
+        ):
+            events.write_text("\n".join(json.dumps(e) for e in base + events_tail), encoding="utf-8")
+            parsed = parse("copilot", events, stderr, result)
+            self.assertEqual(parsed.session_ref, "x")
+            self.assertIs(parsed.subagent_used, False)
+            classified = classify.classify(parsed, exit_code=0, timed_out=False, cancelled=False)[0]
+            self.assertEqual(classified, expected)
+
+    def test_copilot_refuses_project_profiles_and_hook_overrides(self):
+        with self.assertRaisesRegex(CrewError, "absolute COPILOT_HOME"):
+            copilot_environment({"COPILOT_HOME": "relative"}, self.root)
+        with self.assertRaisesRegex(CrewError, "separate from the project"):
+            copilot_environment({"COPILOT_HOME": str(self.root)}, self.root)
+        project = self.root / "project"
+        project.mkdir()
+        override = project / ".claude" / "settings.local.json"
+        override.parent.mkdir()
+        override.touch()
+        profile = self.root / "profile"
+        profile.mkdir()
+        with self.assertRaisesRegex(CrewError, "cannot safely run with repository settings"):
+            copilot_environment({"COPILOT_HOME": str(profile)}, project)
+
+    def test_copilot_deletion_is_a_boundary_violation(self):
+        change = {"kind": "deleted", "path": "README.md"}
+        paths = [self.root / "README.md"]
+        self.assertEqual(snapshot.violations([change], "write", paths, self.root), [])
+        self.assertEqual(snapshot.violations([change], "write", paths, self.root, modifications_only=True), [change])
 
 
 # ------------------------------------------------------------ run end-to-end

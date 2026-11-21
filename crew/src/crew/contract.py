@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from crew.common import (
-    AGENTS, EFFORTS, HIGH_EFFORTS, TASK_ID_RE, CrewError, home_dir, is_drive_root, is_within,
+    AGENTS, EFFORTS, HIGH_EFFORTS, TASK_ID_RE, CrewError, home_dir, is_drive_root, is_secret_name, is_within,
     real, resolve_nearest,
 )
 from crew.state import Runs, retry_of_problem
@@ -316,6 +316,12 @@ def validate(c: Contract, s: dict[str, Any], root: Path, runs: Runs, cfg: dict[s
             errors.append(f"write_path inside .git or .agent-runs: {wp}")
             continue
         wp_abs.append(target)
+
+    if agent == "copilot":
+        if mode != "write":
+            errors.append("copilot is available only for single-file write tasks")
+        elif len(wp_abs) != 1 or not wp_abs[0].is_file() or is_secret_name(wp_abs[0].name):
+            errors.append("copilot requires exactly one existing, non-secret file in write_paths")
 
     # add_dirs
     if s.get("add_dirs") and mode == "write":

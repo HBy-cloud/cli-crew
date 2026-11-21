@@ -3,7 +3,7 @@
 **English** · [한국어](README.ko.md)
 
 Python CLI behind the `cli-crew` skill. It lets a main AI CLI delegate bounded tasks to worker CLIs
-(`codex`, `agy`, `claude`) in safe, non-interactive modes and records verifiable results.
+(`codex`, `agy`, `claude`, and `copilot` for single-file edits) in safe, non-interactive modes and records verifiable results.
 [Worker protocol](../skill/cli-crew/references/protocol.md) · [Skill instructions](../skill/cli-crew/SKILL.md) · [Windows installation](../README.md)
 
 ## Install (development)
@@ -29,6 +29,8 @@ crew handoff --agent claude --task my-task --status Done
 ```
 
 agy write tasks run with a per-session `--settings` file that confines writes to the project; new files inside it are reported by the boundary check.
+
+For a small edit, explicitly select `--agent copilot --mode write --write <file>`. The file must already exist and the contract must use `effort: low`. [Dedicated Copilot profile setup](../skill/cli-crew/references/adapters.md#github-copilot-cli-setup)
 
 Safety flags for `crew run` (ask the user first): `--approve-data-sharing` (instructions mention personal/sensitive
 data), `--approve-cost` (high effort / approval models).

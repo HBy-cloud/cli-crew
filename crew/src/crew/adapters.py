@@ -12,14 +12,16 @@ from pathlib import Path
 from typing import Any
 
 from crew.classify import last_result_block
-from crew.common import EXIT_USAGE, CrewError, read_text
+from crew.common import (
+    EXIT_GUARD, EXIT_USAGE, SECRET_NAME_PATTERNS, CrewError, home_dir, is_secret_name, is_within, read_text, real, same_path,
+)
 
 FORBIDDEN_FLAGS = ("--dangerously", "bypassPermissions", "--allow-all", "--yolo")
 AGY_MAX_CMDLINE_UTF16 = 30000
 
 # CLI versions these adapters were verified against (skill/cli-crew/references/adapters.md, SPEC 6).
 # Update together with that reference after re-verifying flags and output formats.
-VERIFIED_VERSIONS = {"codex": "0.171.0", "agy": "1.5.14", "claude": "2.1.330"}
+VERIFIED_VERSIONS = {"codex": "0.171.0", "agy": "1.5.14", "claude": "2.1.330", "copilot": "1.0.112"}
 
 
 def version_number(text: str | None) -> str | None:
@@ -53,6 +55,15 @@ def binary_prefix(agent: str) -> list[str]:
             pass
         return [override]
     exe = shutil.which(agent)
+    if os.name == "nt" and agent == "copilot" and (not exe or Path(exe).suffix.lower() != ".exe"):
+        # The npm shim is a batch file. Launch its JavaScript entry point without a shell.
+        if exe and Path(exe).suffix.lower() == ".cmd":
+            loader = Path(exe).parent / "node_modules" / "@github" / "copilot" / "npm-loader.js"
+            node = Path(exe).with_name("node.exe")
+            node = str(node) if node.is_file() else shutil.which("node.exe")
+            if node and loader.is_file():
+                return [node, str(loader)]
+        exe = shutil.which("copilot.exe")
     if not exe:
         raise CrewError(EXIT_USAGE, f"{agent} CLI not found on PATH")
     return [exe]
@@ -61,6 +72,8 @@ def binary_prefix(agent: str) -> list[str]:
 def cli_version(agent: str) -> str | None:
     try:
         args = binary_prefix(agent) + ["--version"]
+        if agent == "copilot":
+            args.append("--no-auto-update")
         r = subprocess.run(args, capture_output=True, timeout=30, check=False)
     except (CrewError, OSError, subprocess.TimeoutExpired):
         return None
@@ -88,6 +101,55 @@ def agy_file_instruction(prompt_rel: str) -> str:
         "then carry out the task it describes exactly, following every rule in it, "
         "and end your reply with the '## RESULT' block it specifies. Do not run shell commands."
     )
+
+
+def copilot_permission_pattern(path: Path) -> str:
+    """Escape literal paths for the Copilot tool permission glob syntax."""
+    return re.sub(r"([*?\[\]])", lambda m: f"[{m[0]}]", path.as_posix())
+
+
+def copilot_environment(env: dict[str, str], root: Path) -> dict[str, str]:
+    """Run with an explicitly selected, authenticated profile and controlled permissions."""
+    configured = env.get("COPILOT_HOME")
+    if not configured or not Path(configured).is_absolute():
+        raise CrewError(EXIT_GUARD, "copilot requires an absolute COPILOT_HOME for a dedicated profile")
+    profile = real(configured)
+    if (not profile.is_dir() or same_path(profile, home_dir() / ".copilot")
+            or is_within(profile, root) or is_within(root, profile)):
+        raise CrewError(EXIT_GUARD, "use a dedicated COPILOT_HOME separate from the project and default profile")
+    for name in ("permissions-config.json", "mcp-config.json", "providers.json"):
+        if (profile / name).exists() or (profile / name).is_symlink():
+            raise CrewError(EXIT_GUARD, f"the dedicated Copilot profile must not contain {name}")
+    # Repository settings can supply hooks or override disableAllHooks. Inspect their presence only.
+    for directory in (root, *root.parents):
+        for settings_dir in (".github/copilot", ".claude"):
+            for name in ("settings.json", "settings.local.json"):
+                settings_path = directory / settings_dir / name
+                if settings_path.exists() or settings_path.is_symlink():
+                    raise CrewError(EXIT_GUARD, f"copilot cannot safely run with repository settings: {settings_path}")
+        if (directory / ".git").exists() or directory == home_dir():
+            break
+    result = {key: value for key, value in env.items() if not key.upper().startswith("COPILOT_")}
+    result.update(
+        COPILOT_HOME=str(profile),
+        COPILOT_CACHE_HOME=str(profile / "cache"),
+        COPILOT_ALLOW_ALL="false",
+        COPILOT_ASSISTED_APPROVAL="false",
+        COPILOT_AUTO_UPDATE="false",
+        COPILOT_PLUGIN_DIR_ONLY="true",
+        COPILOT_TELEMETRY_DISABLED="true",
+        USE_TGREP="false",
+    )
+    try:
+        check = subprocess.run(
+            binary_prefix("copilot") + ["--no-auto-update", "config", "disableAllHooks"],
+            cwd=root, env=result, capture_output=True, timeout=30, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CrewError(EXIT_GUARD, "could not check the dedicated Copilot profile's hook setting") from exc
+    if check.returncode or check.stdout.strip() != b"true":
+        raise CrewError(EXIT_GUARD, "set disableAllHooks to true in the dedicated Copilot profile")
+    return result
 
 
 def build(agent: str, s: dict[str, Any], *, root: Path, add_dirs: list[Path], prompt_text: str,
@@ -139,9 +201,29 @@ def build(agent: str, s: dict[str, Any], *, root: Path, add_dirs: list[Path], pr
             for d in add_dirs:
                 args += ["--add-dir", str(d)]
         inv = Invocation(args, prompt_text)
+    elif agent == "copilot":
+        target_path = Path(s["copilot_target"])
+        path = real(target_path)
+        if (os.path.normcase(path) != os.path.normcase(target_path) or not is_within(path, root)
+                or not path.is_file() or is_secret_name(path.name)):
+            raise CrewError(EXIT_GUARD, "copilot write target must still be an existing, non-secret project file")
+        target = copilot_permission_pattern(path)
+        read_denials = [f"--deny-tool=read({pattern})" for pattern in SECRET_NAME_PATTERNS]
+        args = prefix + [
+            "--no-auto-update", "--no-custom-instructions", "--disable-builtin-mcps",
+            "--disallow-temp-dir", "--no-ask-user", "--no-color", "--sync-session=off",
+            "--mode", "interactive", "--available-tools", "view", "apply_patch",
+            "--deny-tool=shell", "--deny-tool=memory", *read_denials,
+            f"--allow-tool=write({target})", "--max-ai-credits=30", "--output-format=json",
+            f"--model={model or 'auto'}", "-p", prompt_text,
+        ]
+        if os.name == "nt" and len(subprocess.list2cmdline(args).encode("utf-16-le")) // 2 > 30000:
+            raise CrewError(EXIT_USAGE, "copilot command line too long; shorten the contract")
+        inv = Invocation(args, None)
     else:
         raise CrewError(EXIT_USAGE, f"unknown agent: {agent}")
-    _assert_safe(inv.args[len(prefix):])
+    flags_end = -1 if agent == "copilot" else len(inv.args)
+    _assert_safe(inv.args[len(prefix):flags_end])
     return inv
 
 
@@ -308,4 +390,40 @@ def parse(agent: str, stdout_path: Path, stderr_path: Path, result_path: Path) -
                 p.diag.append(f"claude is_error subtype={data.get('subtype')} api_error_status={data.get('api_error_status')}")
             for d in p.permission_denials:
                 p.diag.append(f"claude permission_denial: {json.dumps(d, ensure_ascii=False)[:500]}")
+    elif agent == "copilot":
+        objs, other = _jsonl(out)
+        p.events = objs
+        p.diag.extend(other)
+        terminal = False
+        for event in objs:
+            kind = event.get("type")
+            data = event.get("data", event)
+            if not isinstance(data, dict):
+                continue
+            if kind == "session.start":
+                p.session_ref = data.get("sessionId")
+                if p.subagent_used is None:
+                    p.subagent_used = False
+            elif kind == "assistant.message" and not data.get("toolRequests"):
+                if isinstance(data.get("content"), str):
+                    p.final_text = data["content"]
+                    p.model_actual = data.get("model")
+            elif kind == "tool.execution_start":
+                p.final_text = ""
+                if data.get("toolName") in ("task", "invoke_subagent"):
+                    p.subagent_used = True
+            elif kind == "tool.execution_complete" and data.get("success") is False:
+                detail = json.dumps(data.get("error") or data.get("result"), ensure_ascii=False)[:500]
+                if re.search(r"permission|not allowed|denied|requires approval", detail, re.I):
+                    p.permission_denials.append(detail)
+            elif kind in ("result", "session.error"):
+                terminal = terminal or kind == "result"
+                status = data.get("subtype")
+                if (kind == "session.error" or data.get("exitCode") not in (None, 0)
+                        or data.get("isError") or data.get("is_error") or status == "error"):
+                    p.is_error = True
+                    p.diag.append(str(data.get("error") or data.get("message") or status or "copilot error")[:500])
+        if not terminal:
+            p.is_error = True
+            p.diag.append("copilot terminal result event is missing")
     return p

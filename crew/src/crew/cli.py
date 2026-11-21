@@ -504,7 +504,8 @@ def recheck(root: Path, runs: st.Runs, s: dict[str, Any]) -> dict[str, Any]:
         if s.get("worker_handoff"):
             out["boundary_violations"] = runner.handoff_violations(runs, changes, s, root)
         else:
-            out["boundary_violations"] = snapshot.violations(changes, s["mode"], wp, root)
+            out["boundary_violations"] = snapshot.violations(changes, s["mode"], wp, root,
+                                                             modifications_only=s.get("agent") == "copilot")
     except (OSError, ValueError, KeyError):
         out["boundary_violations"] = "UNKNOWN"
     return out

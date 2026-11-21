@@ -25,12 +25,13 @@ KST = timezone(timedelta(hours=9))
 
 TASK_ID_RE = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
 
-AGENTS = ("codex", "agy", "claude")
+AGENTS = ("codex", "agy", "claude", "copilot")
 
 EFFORTS = {
     "codex": ("low", "medium", "high", "xhigh"),
     "agy": ("low", "medium", "high", "xhigh", "max"),
     "claude": ("low", "medium", "high", "xhigh", "max"),
+    "copilot": ("low",),
 }
 HIGH_EFFORTS = {"high", "xhigh", "max"}
 

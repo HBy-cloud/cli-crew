@@ -26,4 +26,6 @@ One or two sentences describing the goal.
 - Observable conditions that mean the task is complete.
 
 ## Notes
+
+For GitHub Copilot CLI, use `agent: copilot`, `mode: write`, and `effort: low`. List one existing non-secret file in `write_paths`.
 - Optional.

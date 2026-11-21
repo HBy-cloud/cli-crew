@@ -107,11 +107,17 @@ def executor_model(executor: str) -> str | None:
 def _same_model(reviewer: str, author: str) -> str | None:
     """Reviewer independence is judged by model (2026-11-21 user decision). Returns 'agent/model' when the reviewer
     may run on the same model as the author: same CLI and the same model, or a model that cannot be told apart
-    (one side uses the CLI default). Different CLIs count as different models."""
+    (one side uses the CLI default). Copilot can select models also available via other CLIs."""
     ra, ta = executor_agent(reviewer), executor_agent(author)
-    if not ra or ra != ta:
+    if not ra or not ta:
         return None
     rm, tm = executor_model(reviewer), executor_model(author)
+    if ra != ta:
+        if "copilot" not in (ra, ta):
+            return None
+        if not rm or not tm or "auto" in (rm.lower(), tm.lower()):
+            return "Copilot can use the same model as another CLI; verify the actual model"
+        return rm if rm.lower() == tm.lower() else None
     if rm and tm and rm.lower() != tm.lower():
         return None
     if rm and tm:

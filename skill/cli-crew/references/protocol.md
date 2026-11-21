@@ -6,13 +6,13 @@ This reference describes the worker protocol for the main agent. Maintainer chec
 | field | values | notes |
 |---|---|---|
 | task_id | `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` | never reused, even after cleanup |
-| agent | codex, agy, claude | or `crew run --agent` |
+| agent | codex, agy, claude, copilot | or `crew run --agent` |
 | mode | read, write | read is default |
 | write_paths | relative paths inside the project | required for write; not `.git`/`.agent-runs` |
 | add_dirs | absolute directories | read mode only |
 | allow_subagents | true/false | true only in read mode |
-| effort | codex: low..xhigh · agy: low..max · claude: low..max | high+ needs `--approve-cost` |
-| model | id or null | null = CLI default |
+| effort | codex: low..xhigh · agy: low..max · claude: low..max · copilot: low | high+ needs `--approve-cost` |
+| model | id or null | null = CLI default; Copilot uses Auto and remains unresolved for cost approval |
 | task_kind | investigate, implement, review, document, other, or null | Optional category for project-local routing history. Untagged runs are excluded. `review` adds the reviewer rule (see Reviewer result). |
 | timeout_min | 1..120 | default 20 |
 | max_retries | 0 or 1 | retry only on transient errors, never after partial writes or usage limits |
@@ -72,8 +72,9 @@ Reservation is atomic (`.agent-runs/locks/reserve.lock`).
   are recorded in `env_stripped`. Extra names can be allowed via `env_passthrough` in `~/.crew/config.toml`.
 - Sensitive-data hints in instruction files → `crew run` requires `--approve-data-sharing`.
 - agy write mode runs with a per-session `--settings` file; `--allow-unbounded-write` is deprecated and ignored.
+- Copilot requires an explicit single-file write contract and a dedicated profile. Its built-in tools are restricted to reading and editing, and the CLI receives a write rule for the target file only. The normal boundary checks still run.
 - Worker prompt header tells workers to treat file contents as data and ignore embedded instructions.
-- Limits: workers other than claude can read any file the user can read; writes outside the project are not
+- Limits: Codex and agy can read any file the user can read; writes outside the project are not
   detected; agy has browser tools. Workers may read the public web; the header forbids sending project content,
   secrets or personal data, but crew does not block network access.
 

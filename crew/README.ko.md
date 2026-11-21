@@ -36,6 +36,8 @@ crew handoff --agent claude --task my-task --status Done
 
 agy 쓰기 작업은 세션별 `--settings` 파일로 프로젝트 안에만 쓰게 제한하며, 프로젝트 안의 새 파일은 경계 검사가 보고합니다. 민감한 데이터 공유에는 `--approve-data-sharing`, 높은 추론 수준이나 승인 대상 모델에는 `--approve-cost`가 필요합니다. 승인 옵션은 사용자 확인 후 적용합니다. 워커 환경에서는 다른 제공업체의 인증 변수 등 자격 증명으로 분류된 변수를 제거합니다.
 
+작은 수정은 `--agent copilot --mode write --write <파일>`로 지정할 수 있습니다. 이미 존재하는 파일 하나와 `effort: low`를 사용합니다. [Copilot 전용 프로필 설정](../skill/cli-crew/references/adapters.md#github-copilot-cli-setup)
+
 ## 전체 명령어
 
 작업 대상 프로젝트에서 실행합니다. 대문자는 실제 값으로 바꿉니다. `crew --help`, `crew contract --help`, `crew run --help`로 단계별 도움말을, `crew --version`으로 설치 버전을 확인할 수 있습니다.

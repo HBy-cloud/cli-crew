@@ -79,6 +79,8 @@ def build_prompt(s: dict[str, Any], contract_body: str) -> str:
         mode_rule = "This is a READ-ONLY task: do not modify, create, or delete any file."
     else:
         mode_rule = "Modify files ONLY under these paths (relative to the working directory): " + ", ".join(s["write_paths"])
+        if s.get("agent") == "copilot":
+            mode_rule += ". Pass paths to file tools relative to the working directory. Do not construct absolute paths."
     header = HEADER.format(subagent_rule=sub, mode_rule=mode_rule)
     if s.get("task_kind") == "review":
         header = header.replace("# TASK CONTRACT", REVIEW_RULE + "# TASK CONTRACT")
@@ -167,6 +169,8 @@ def cost_gate(s: dict[str, Any], cfg: dict[str, Any], approved: bool) -> str | N
         reasons.append(f"effort {s['effort']}")
     approval = cfg.get("approval_models") or []
     model = s.get("model") or default_model(s["agent"])
+    if s["agent"] == "copilot" and model == "auto":
+        model = None
     s["model_resolved"] = model
     if approval:
         if model is None:
@@ -212,7 +216,7 @@ def _subagent_evidence(agent: str, parsed: adapters.Parsed, started_epoch: float
         ev["children"] = [{"conversation_id": c} for c in parsed.subagent_ids]
         for cid in ([parsed.session_ref] if parsed.session_ref else []) + parsed.subagent_ids:
             ev["session_paths"] += agy_conversation_paths(cid)
-    elif agent == "claude":
+    elif agent in ("claude", "copilot"):
         ev["used"] = parsed.subagent_used
     return ev
 
@@ -260,7 +264,7 @@ def _record_cancelled_attempt(runs: st.Runs, state: dict[str, Any], pending: dic
         pending.clear()
         return
     parsed = adapters.parse(agent, f["events"], f["log"], f["result"])
-    if agent in ("agy", "claude") and parsed.final_text and not f["result"].exists():
+    if agent != "codex" and parsed.final_text and not f["result"].exists():
         atomic_write_text(f["result"], parsed.final_text)
     ev = _subagent_evidence(agent, parsed, pending["a_started"], bool(state.get("ephemeral")))
     atomic_write_json(f["subagents"], ev)
@@ -299,7 +303,8 @@ def finalize(runs: st.Runs, state: dict[str, Any], *, root: Path, write_paths_ab
                 viol = handoff_violations(runs, changes, state, root)
                 state["handoff_written"] = (root / state["handoff_slot"]).is_file()
             else:
-                viol = snapshot.violations(changes, state["mode"], write_paths_abs, root)
+                viol = snapshot.violations(changes, state["mode"], write_paths_abs, root,
+                                           modifications_only=state.get("agent") == "copilot")
             state["changes"] = changes
             state["boundary_violations"] = viol
             if viol:
@@ -401,6 +406,13 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
     if version is None:
         raise CrewError(EXIT_USAGE, f"{s['agent']} CLI is not available")
 
+    env, stripped = safety.worker_env(s["agent"], dict(os.environ), cfg.get("env_passthrough"))
+    if s["agent"] == "copilot":
+        env = adapters.copilot_environment(env, root)
+        s["copilot_target"] = str(chk.write_paths_abs[0])
+    env["AGENT_ROLE"] = "WORKER"
+    env["PYTHONIOENCODING"] = "utf-8"
+
     started = now_iso()
     state: dict[str, Any] = {
         "task_id": tid, "status": "RUNNING", "agent": s["agent"], "cli_version": version,
@@ -482,12 +494,10 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
                     prompt_rel=os.path.relpath(prompt_path, root).replace("\\", "/"),
                     result_path=f["result"], cfg=cfg,
                 )
-                env, stripped = safety.worker_env(s["agent"], dict(os.environ), cfg.get("env_passthrough"))
                 state["env_stripped"] = stripped
-                env["AGENT_ROLE"] = "WORKER"
-                env["PYTHONIOENCODING"] = "utf-8"
                 a_started = time.time()
-                attempt: dict[str, Any] = {"n": n, "started": now_iso(), "args": inv.args[:-1] if s["agent"] == "agy" else inv.args}
+                logged_args = inv.args[:-1] if s["agent"] in ("agy", "copilot") else inv.args
+                attempt: dict[str, Any] = {"n": n, "started": now_iso(), "args": logged_args}
                 with defer_interrupt():
                     proc = procutil.spawn(inv.args, cwd=str(root), env=env,
                                           stdin_path=prompt_path if inv.stdin_text is not None else None,
@@ -506,7 +516,7 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
                     hard_s = min(hard_s, float(os.environ["CREW_TEST_HARD_TIMEOUT_S"]))
                 rc, timed_out = _wait(proc, hard_s, cancel_request, ct)
                 parsed = adapters.parse(s["agent"], f["events"], f["log"], f["result"])
-                if s["agent"] in ("agy", "claude") and parsed.final_text and not f["result"].exists():
+                if s["agent"] != "codex" and parsed.final_text and not f["result"].exists():
                     atomic_write_text(f["result"], parsed.final_text)
                 status, reason, ws = classify.classify(parsed, exit_code=rc, timed_out=timed_out, cancelled=False)
                 ev = _subagent_evidence(s["agent"], parsed, a_started, bool(s.get("ephemeral")))

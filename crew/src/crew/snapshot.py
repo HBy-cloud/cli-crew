@@ -177,7 +177,8 @@ def diff(before: dict[str, Any], after: dict[str, Any], root: Path) -> list[dict
     return changes
 
 
-def violations(changes: list[dict[str, Any]], mode: str, write_paths_abs: list[Path], root: Path) -> list[dict[str, Any]]:
+def violations(changes: list[dict[str, Any]], mode: str, write_paths_abs: list[Path], root: Path,
+               *, modifications_only: bool = False) -> list[dict[str, Any]]:
     from crew.common import is_within
 
     if mode == "read":
@@ -185,6 +186,6 @@ def violations(changes: list[dict[str, Any]], mode: str, write_paths_abs: list[P
     out = []
     for ch in changes:
         target = root / ch["path"]
-        if not any(is_within(target, wp) for wp in write_paths_abs):
+        if (modifications_only and ch["kind"] != "modified") or not any(is_within(target, wp) for wp in write_paths_abs):
             out.append(ch)
     return out

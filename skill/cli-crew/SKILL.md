@@ -1,6 +1,6 @@
 ---
 name: cli-crew
-description: Coordinate multi-step coding, investigation, and review work across codex, agy, and claude with crew. Set up missing project instructions when the user asks for onboarding or invokes this skill by name. Use for project onboarding or when a goal benefits from independent investigation, bounded implementation, or a second review, even when the user names no worker. Main plans the steps, chooses between doing the work itself, its own subagents, and crew workers, verifies results, and finishes the requested task.
+description: Coordinate multi-step coding, investigation, and review work across codex, agy, and claude with crew. Use GitHub Copilot CLI for explicitly selected single-file edits. Set up missing project instructions when the user asks for onboarding or invokes this skill by name. Use for project onboarding or when a goal benefits from independent investigation, bounded implementation, or a second review, even when the user names no worker. Main plans the steps, chooses between doing the work itself, its own subagents, and crew workers, verifies results, and finishes the requested task.
 ---
 
 # cli-crew
@@ -62,7 +62,7 @@ Rules for your own subagents: they never run `crew` or delegate further, and the
 4. If `detect` warns about API key environment variables, tell the user workers may bill the API.
    If it shows a VERSION WARNING, tell the user that worker's results may be misclassified. Prefer another
    worker, or read its full response (`crew result <ID> --raw`) before trusting the status.
-5. **Delegation sends project content to another provider** (codex → OpenAI, agy → Google, claude → Anthropic).
+5. **Delegation sends project content to another service** (codex → OpenAI, agy → Google, claude → Anthropic, copilot → GitHub Copilot).
    If `detect` shows SENSITIVE DATA HINTS (personal data, resumes, customer data, confidential material),
    ask the user before delegating; only then pass `--approve-data-sharing` to `crew run`.
    Never put personal data or secrets into a contract; reference paths and keep scope minimal.
@@ -78,13 +78,13 @@ For each delegated task, choose the CLI, model and reasoning effort together. Us
 - claude `--restricted` write mode: edits confined to the project, no shell; `crew` names the allowed `write_paths` and checks changes against them.
 - codex: rejects writes outside the project; no shell in sandbox.
 - agy: crew confines it to the project with `--settings` (no outside writes, no overwrite of unlisted files) but cannot stop new files inside the project; check the boundary report.
-- No worker is prevented from *reading* secret files except claude `--restricted` (limited to the project and
-  `add_dirs`). For sensitive projects prefer claude.
+- Copilot is opt-in for small edits to one existing non-secret file. It uses only file tools at `effort: low` and a dedicated authenticated profile. See `references/adapters.md` for setup.
+- Keep secrets out of every contract and file context. For sensitive projects prefer claude `--restricted` and follow the data-sharing gate.
 - Web: workers may read public web pages and search, but must not send project content; what each CLI can actually fetch is unverified (earlier: agy and claude got search summaries only, codex none). Collect page contents you depend on yourself or with subagents; give workers material to analyze or review (generalized, no personal data, only with the user's OK).
-- A different model than the author is required for independent review; the same CLI counts only with two different explicit models.
+- A different model than the author is required for independent review. Check the actual model when Copilot can select a model also offered by the reviewer CLI.
 
 ## 3. Contract
-1. `crew contract new <TASK_ID> --agent <codex|agy|claude> --kind <kind> --mode <read|write> [--write <paths...>] [--plan <PLAN_ID> --step <STEP>]`
+1. `crew contract new <TASK_ID> --agent <codex|agy|claude|copilot> --kind <kind> --mode <read|write> [--write <paths...>] [--plan <PLAN_ID> --step <STEP>]`
 2. Edit `.agent-runs/contracts/<TASK_ID>.md`: Objective, Context (file **paths**, not contents), Done when.
    - `mode: read` is the default. Use `write` only with explicit `write_paths` inside the project.
    - `add_dirs` (outside read paths) only in read mode. Need outside material for a write task? Split it.
