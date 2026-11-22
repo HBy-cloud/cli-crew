@@ -38,6 +38,13 @@ The following private records may be present in a maintainer checkout:
 8. When using the `cli-crew` skill on this repository (or when the user asks to work with a worker or reviewer),
    follow `skill/cli-crew/SKILL.md`: write a cplan (`crew plan new`) before any multi-step task or file edit, and
    run an independent reviewer step on a different model than the author.
+9. Never delete permanently. When a deletion is requested, use `py -3 scripts/trash.py <paths>` (dry run), then add
+   `--yes`: items go to the Recycle Bin, or are renamed into a dated backup folder on the same volume when
+   recycling is not known to be safe. Exceptions:
+   files tracked by git (`git rm`; history keeps them) and temporary folders a command created for itself under
+   the OS temp directory. Git-ignored files are not backed up anywhere, so check `git status --ignored` before
+   risky work. Code or tests that delete paths must never be run against the repository root or its parents; test
+   deletion and cleanup logic with the delete calls stubbed out.
 
 ## Handoffs
 - Handoffs are local records; `handoffs/` is git-ignored and not published.
