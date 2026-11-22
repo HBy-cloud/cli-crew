@@ -227,6 +227,19 @@ cli-crew는 초기 릴리스(0.1.0)입니다. Windows에서 설치, 재설치, �
 
 ## 개발
 
+### 로컬 파일 안전하게 삭제하기
+
+저장소 루트에서 [`scripts/trash.py`](scripts/trash.py)로 이동 계획을 미리 봅니다. 표시된 대상과 이동 위치를 확인한 뒤 `--yes`를 붙여 실행합니다.
+
+```powershell
+py -3 scripts/trash.py path\to\file
+py -3 scripts/trash.py path\to\file --yes
+```
+
+Windows에서 해당 항목을 휴지통으로 보낼 수 있다고 확인되면 휴지통을 사용합니다. 그 외에는 같은 볼륨에 날짜별 백업 폴더를 만들어 옮깁니다. 기본 백업 위치는 `<볼륨>\cli-crew-trash` 아래입니다. 이동 전 검사에서 경로 하나라도 거부되면 아무 항목도 옮기지 않습니다. 예외는 [저장소의 삭제 규칙](AGENTS.md)을 참고하세요.
+
+### 테스트 실행
+
 `crew`는 Python 표준 라이브러리만 씁니다. 테스트는 로컬 가짜 워커를 쓰고 제공업체를 호출하지 않습니다. 다음 명령으로 실행합니다.
 
 ```powershell

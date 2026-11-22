@@ -227,6 +227,19 @@ cli-crew is an early release (0.1.0). Windows installation, reinstallation, and 
 
 ## Development
 
+### Safely remove local files
+
+From the repository root, preview the move with [`scripts/trash.py`](scripts/trash.py). Review the listed paths and destinations before adding `--yes`.
+
+```powershell
+py -3 scripts/trash.py path\to\file
+py -3 scripts/trash.py path\to\file --yes
+```
+
+On Windows, the script uses the Recycle Bin when it can verify that recycling is available for the item. Otherwise it moves the item to a dated backup folder on the same volume, under `<volume>\cli-crew-trash` by default. If the script refuses any path during the preview checks, it moves nothing. See [the repository's deletion rules](AGENTS.md) for exceptions.
+
+### Run tests
+
 `crew` uses only the Python standard library. To run the test suite, which uses local fake workers and no provider calls:
 
 ```powershell
