@@ -7,6 +7,9 @@ license = "MIT"
 license-files = ["LICENSE"]
 dependencies = []
 
+[project.optional-dependencies]
+terminal = ["pywinpty>=3.0.3,<4; sys_platform == 'win32'"]
+
 [project.scripts]
 crew = "crew.cli:main"
 
@@ -16,4 +19,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+crew = ["viewer/*.html", "viewer/*.css", "viewer/*.js", "viewer/vendor/*"]
 

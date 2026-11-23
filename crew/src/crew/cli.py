@@ -20,8 +20,10 @@ from crew.common import (
 )
 from crew.safety import INSTRUCTION_FILES, instruction_dirs, scan_instructions
 from crew.subagents import path_size, verify_codex_rollout_for_delete
+from crew.trace import trace_timestamp
 
-API_KEY_VARS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY")
+API_KEY_VARS = ("OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "GEMINI_API_KEY",
+                "GOOGLE_API_KEY")
 
 
 def emit(data: Any, as_json: bool, lines: list[str]) -> None:
@@ -31,9 +33,9 @@ def emit(data: Any, as_json: bool, lines: list[str]) -> None:
         print("\n".join(lines))
 
 
-def _root_and_runs() -> tuple[Path, st.Runs]:
+def _root_and_runs(project: Path | None = None) -> tuple[Path, st.Runs]:
     from crew.common import find_project_root
-    root = find_project_root()
+    root = project if project is not None else find_project_root()
     return root, st.Runs(root)
 
 
@@ -282,7 +284,7 @@ def cmd_plan_show(a) -> int:
 def _check(a, root: Path, runs: st.Runs) -> tuple[ct.Contract, ct.CheckResult]:
     cfg = load_config()
     try:
-        c = ct.load(a.file)
+        c = ct.load(a.file, expected_digest=getattr(a, "viewer_contract_digest", None))
     except ct.ContractError as e:
         raise CrewError(EXIT_USAGE, str(e))
     s = ct.merge(c, cfg, agent=a.agent, effort=a.effort, model=a.model, timeout=getattr(a, "timeout", None))
@@ -360,13 +362,17 @@ def summarize(state: dict[str, Any], runs: Any = None) -> list[str]:
 
 
 def cmd_run(a) -> int:
-    root, runs = _root_and_runs()
+    root, runs = _root_and_runs(getattr(a, "viewer_project", None))
     cfg = load_config()
     c, r = _check(a, root, runs)
     if not r.ok:
         for e in r.errors:
             print(f"ERROR: {e}")
         return EXIT_USAGE
+    if getattr(a, "viewer_project", None) is not None:
+        scope = instruction_dirs(root, root, r.settings.get("write_paths") or [], r.add_dirs_abs)
+        if scan_instructions(scope)["restrictions"]:
+            raise CrewError(EXIT_GUARD, "delegation instructions require review in the CLI")
     state = runner.run(root, runs, r, c.body, cfg, approve_cost=a.approve_cost,
                        approve_data_sharing=a.approve_data_sharing, allow_unbounded_write=a.allow_unbounded_write)
     lines = summarize(state, runs)
@@ -381,7 +387,7 @@ def cmd_run(a) -> int:
 
 
 def cmd_cancel(a) -> int:
-    root, runs = _root_and_runs()
+    root, runs = _root_and_runs(getattr(a, "viewer_project", None))
     code, msg = runner.cancel(root, runs, a.task_id, a.yes, a.target)
     print(msg)
     return code
@@ -417,7 +423,7 @@ def cmd_routing(a) -> int:
 
 
 def cmd_status(a) -> int:
-    _, runs = _root_and_runs()
+    _, runs = _root_and_runs(getattr(a, "viewer_project", None))
     states = sorted(runs.iter_states(), key=lambda s: s.get("started") or "", reverse=True)
     if not a.all:
         states = [s for s in states if s.get("status") in st.ACTIVE_STATES or not s.get("verdict")][:20]
@@ -431,6 +437,38 @@ def cmd_status(a) -> int:
     if not rows:
         lines = ["no tasks"]
     emit(rows, a.json, lines)
+    return EXIT_OK
+
+
+def cmd_trace_view(a) -> int:
+    from crew.trace_view import create_server
+
+    _, runs = _root_and_runs()
+    if a.interactive:
+        from crew.terminal_session import serve_interactive
+
+        return serve_interactive(runs, _display_status, a.port)
+    with create_server(runs, _display_status, a.port) as server:
+        print(f"Crew trace: http://127.0.0.1:{server.server_port}/ (Ctrl+C to stop)", flush=True)
+        server.serve_forever()
+    return EXIT_OK
+
+
+def cmd_trace_hook(a) -> int:
+    from crew.trace import READ_LIMIT, record_claude_hook
+
+    if os.environ.get("AGENT_ROLE") == "WORKER":
+        return EXIT_OK
+    raw = sys.stdin.buffer.read(READ_LIMIT + 1)
+    if len(raw) > READ_LIMIT:
+        return EXIT_OK
+    try:
+        payload = json.loads(raw)
+    except (ValueError, RecursionError):
+        return EXIT_OK
+    if isinstance(payload, dict):
+        _, runs = _root_and_runs()
+        record_claude_hook(runs, payload, a.plan)
     return EXIT_OK
 
 
@@ -512,7 +550,7 @@ def recheck(root: Path, runs: st.Runs, s: dict[str, Any]) -> dict[str, Any]:
 
 
 def cmd_check(a) -> int:
-    root, runs = _root_and_runs()
+    root, runs = _root_and_runs(getattr(a, "viewer_project", None))
     s = _require_state(runs, a.task_id)
     if a.recheck:
         r = recheck(root, runs, s)
@@ -533,7 +571,7 @@ def cmd_check(a) -> int:
 
 
 def cmd_result(a) -> int:
-    _, runs = _root_and_runs()
+    _, runs = _root_and_runs(getattr(a, "viewer_project", None))
     s = _require_state(runs, a.task_id)
     print(_result_text(runs, s, a.raw))
     return EXIT_OK
@@ -581,7 +619,7 @@ def cmd_accept(a) -> int:
     s["verdict"] = "ACCEPTED"
     s["main_verification"] = a.verified
     s["override_reason"] = a.reason if a.override else None
-    s["judged_at"] = now_iso()
+    s["judged_at"] = trace_timestamp()
     runs.save_state(s)
     print(f"{a.task_id}: ACCEPTED")
     return EXIT_OK
@@ -596,7 +634,7 @@ def cmd_reject(a) -> int:
         raise CrewError(EXIT_GUARD, f"{a.task_id} already judged: {s['verdict']}")
     s["verdict"] = "REJECTED"
     s["verdict_reason"] = a.reason
-    s["judged_at"] = now_iso()
+    s["judged_at"] = trace_timestamp()
     runs.save_state(s)
     n = st.rejected_chain_count(runs.registry(), a.task_id)
     print(f"{a.task_id}: REJECTED" + (" — chain rejected twice; report to the user instead of re-delegating" if n >= 2 else ""))
@@ -781,9 +819,6 @@ def cmd_clean(a) -> int:
                     p = runs.file(name)
                     if p.is_file() and p.parent == runs.dir:
                         p.unlink()
-                c = runs.contracts / f"{tid}.md"
-                if c.is_file():
-                    c.unlink()
                 runs.state_path(tid).unlink()
     lines.append(f"codex session files: {len(report['sessions'])} ({total_bytes / 1e6:.1f} MB)")
     agy_bytes = sum(x["bytes"] for x in report["agy_report"])
@@ -880,6 +915,16 @@ def build_parser() -> argparse.ArgumentParser:
     add_json(sp)
     sp.set_defaults(func=cmd_status)
 
+    trace_parser = sub.add_parser("trace", help="view project-local worker and subagent activity")
+    trace_commands = trace_parser.add_subparsers(dest="trace_cmd", required=True)
+    sp = trace_commands.add_parser("view", help="serve a local trace and query dashboard on 127.0.0.1")
+    sp.add_argument("--port", type=int, default=0, help="loopback port (default: automatically selected)")
+    sp.add_argument("--interactive", choices=["codex"], help="share one interactive Windows CLI with the viewer")
+    sp.set_defaults(func=cmd_trace_view)
+    sp = trace_commands.add_parser("claude-hook", help="receive an opt-in Claude Code main lifecycle hook on stdin")
+    sp.add_argument("--plan", help="cplan ID to display alongside this main session")
+    sp.set_defaults(func=cmd_trace_hook)
+
     sp = sub.add_parser("check")
     sp.add_argument("task_id")
     sp.add_argument("--recheck", action="store_true")
@@ -928,13 +973,16 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, viewer_project: Path | None = None,
+         viewer_contract_digest: str | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
         except (AttributeError, ValueError):
             pass
     args = build_parser().parse_args(argv)
+    args.viewer_project = viewer_project
+    args.viewer_contract_digest = viewer_contract_digest
     try:
         return int(args.func(args) or 0)
     except CrewError as e:

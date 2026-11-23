@@ -241,8 +241,11 @@ def load_config() -> dict[str, Any]:
     cfg = dict(DEFAULT_CONFIG)
     path = config_path()
     if path.exists():
-        with open(path, "rb") as f:
-            data = tomllib.load(f)
+        try:
+            with open(path, "rb") as f:
+                data = tomllib.load(f)
+        except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
+            raise CrewError(EXIT_USAGE, f"invalid config file {path}: {e}") from e
         for key in DEFAULT_CONFIG:
             if key in data:
                 cfg[key] = data[key]

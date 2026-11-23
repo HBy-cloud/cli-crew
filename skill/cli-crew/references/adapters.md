@@ -33,11 +33,12 @@ Copilot chooses the model with Auto unless you name one. The 30 AI-credit sessio
 - Web (verified 2026-11-21, one run each, under the old no-network header): codex was BLOCKED by that header; agy ran `search_web` and claude ran `WebSearch`,
   both with summaries only and no page fetch, so postings and deadlines stayed unverified. The header now allows reading the public web (2026-11-21
   user decision) but forbids sending project content; real fetch ability per CLI is not re-verified. Do not rely on workers for page contents yet.
-- Safe-mode workers cannot run shell commands (codex sandbox `CreateProcessAsUserW` denied; agy print mode
-  auto-denies commands; claude `--restricted` has no shell). Main runs tests/builds.
+- Main runs shell commands, tests, and builds. The Codex adapter selects a filesystem sandbox and the worker
+  prompt assigns file tools. A Windows smoke test observed `CreateProcessAsUserW` denied, which is specific
+  to that environment. agy print mode auto-denied commands in testing, and Claude's `--restricted` mode omits shell access.
 - Exit code 0 does not mean success. agy prints `jetski: no output produced ... auto-denied` with exit 0.
 - `--add-dir` grants write access in codex/claude write modes, so crew forbids it in write mode.
-- agy writes outside cwd under the default config. Crew passes a per-session `--settings` file (`allowNonWorkspaceAccess: false`, `write_file` allow rules only for the contract's write paths or handoff file). Verified on 1.5.14: outside writes and overwrites of unlisted files are auto-denied; creating new files inside the workspace is not prevented (the snapshot check reports it).
+- agy writes outside cwd under the default config. Crew passes per-session `--settings` with `allowNonWorkspaceAccess: false` and `write_file` rules for the contract's write paths or handoff file. In 1.5.14, outside writes and overwrites of unlisted files were auto-denied. New files inside the workspace can be created. In Git projects the snapshot skips ignored files except those with secret-like names.
 - Codex, agy, and Claude can spawn built-in subagents non-interactively; codex cannot disable it via flags.
   crew detects use: codex child rollouts (`parent_thread_id`), agy `invoke_subagent` steps,
   claude `subagent_stats.spawned`.

@@ -73,6 +73,7 @@ def classify(p: Parsed, *, exit_code: int | None, timed_out: bool, cancelled: bo
     rb = parse_result_block(p.final_text or "")
     ws = rb["status"]
     diag = p.diag
+    signals = diag + p.tool_output  # permission/sandbox signals may also appear in failed command output
     if cancelled:
         return "CANCELLED", "cancelled", ws
     if timed_out or p.print_timeout:
@@ -87,13 +88,13 @@ def classify(p: Parsed, *, exit_code: int | None, timed_out: bool, cancelled: bo
         return "FAILED", reason, ws
     if ws == "failed":
         return "FAILED", "worker_reported_failed", ws
-    if _any(BLOCK_PATTERNS, diag) or p.permission_denials or ws == "blocked":
+    if _any(BLOCK_PATTERNS, signals) or p.permission_denials or ws == "blocked":
         return "BLOCKED", "blocked", ws
     if not (p.final_text or "").strip():
         reason = "transient" if _any(TRANSIENT_PATTERNS, diag) else "empty_response"
         return "FAILED", reason, ws
     if ws in (None, "partial"):
         return "PARTIAL", "no_result_block" if rb["block"] is None else ("invalid_status" if ws is None else "partial"), ws
-    if _any(UNVERIFIED_PATTERNS, diag):
+    if _any(UNVERIFIED_PATTERNS, signals):
         return "DONE_UNVERIFIED", "verification_blocked", ws
     return "DONE", None, ws

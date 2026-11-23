@@ -18,11 +18,17 @@ if "--version" in args:
     print(f"fake-{agent} 1.0")
     sys.exit(0)
 
+if agent == "copilot" and "config" in args and "disableAllHooks" in args:
+    print(os.environ.get("FAKE_COPILOT_HOOKS", "true"))
+    sys.exit(0)
+
 RESULT_OK = "Work done.\n\n## RESULT\nSTATUS: success\nCHANGED_FILES: none\nVERIFICATION: n/a\nRISKS: none\nNEXT: none\n"
 
 prompt = ""
 if agent in ("codex", "claude"):
     prompt = sys.stdin.read()
+elif agent == "copilot":
+    prompt = args[args.index("-p") + 1] if "-p" in args else ""
 else:
     for a in args:
         if a.startswith("--print="):
@@ -82,6 +88,22 @@ elif scenario == "transient_once":
 elif scenario == "env_dump":
     names = [k for k in ("GITHUB_TOKEN", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "AGENT_ROLE") if k in os.environ]
     text = "ENV: " + ",".join(names) + "\n\n" + RESULT_OK
+elif scenario == "copilot_write":
+    target = next(a[len("--allow-tool=write("):-1] for a in args if a.startswith("--allow-tool=write("))
+    with open(target, "a", encoding="utf-8") as f:
+        f.write("edited by copilot\n")
+elif scenario == "copilot_env":
+    names = sorted(k for k in os.environ if k.upper().startswith("COPILOT_"))
+    text = "ENV: " + ",".join(names) + " ALLOW_ALL=" + os.environ.get("COPILOT_ALLOW_ALL", "") + "\n\n" + RESULT_OK
+elif scenario == "codex_subagent":
+    sessions = Path(os.environ["CODEX_HOME"]) / "sessions" / "2026"
+    sessions.mkdir(parents=True, exist_ok=True)
+    (sessions / "rollout-main.jsonl").write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": "fake-thread-1"}}) + "\n"
+        + json.dumps({"type": "turn_context", "payload": {"model": "fake-codex-model"}}) + "\n", encoding="utf-8")
+    (sessions / "rollout-child.jsonl").write_text(json.dumps({"type": "session_meta", "payload": {
+        "id": "child-1", "source": {"subagent": {"thread_spawn": {"parent_thread_id": "fake-thread-1"}}}}}) + "\n",
+        encoding="utf-8")
 elif scenario == "transient_write":
     Path("src").mkdir(exist_ok=True)
     Path("src/partial.txt").write_text("half", encoding="utf-8")
@@ -113,7 +135,12 @@ elif agent == "agy":
 elif agent == "claude":
     denials = [{"tool_name": "Write"}] if scenario == "claude_denied" else []
     print(json.dumps({"result": text, "is_error": exit_code != 0, "permission_denials": denials,
-                      "subagent_stats": {"spawned": 0}, "session_id": "s-1", "total_cost_usd": 0.01,
+                      "subagent_stats": {"spawned": 1 if scenario == "claude_subagent" else 0}, "session_id": "s-1", "total_cost_usd": 0.01,
                       "modelUsage": {"fake-claude": {}}}))
+elif agent == "copilot":
+    print(json.dumps({"type": "session.start", "data": {"sessionId": "copilot-session-1"}}))
+    if text:
+        print(json.dumps({"type": "assistant.message", "data": {"content": text, "model": "fake-copilot-model"}}))
+    print(json.dumps({"type": "result", "exitCode": exit_code}))
 
 sys.exit(exit_code)

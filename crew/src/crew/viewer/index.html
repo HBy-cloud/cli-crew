@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Crew · Runs</title>
+  <link rel="stylesheet" href="/view.css">
+  <script src="/view.js" type="module"></script>
+</head>
+<body>
+  <header class="masthead">
+    <div>
+      <h1>Crew <span>Runs</span></h1>
+      <p id="project" class="project"></p>
+    </div>
+    <div class="toolbar">
+      <span id="connection" role="status">Connecting</span>
+      <a id="cli-session" class="toolbar-link" href="/terminal" hidden>CLI session</a>
+      <button id="status-query" type="button" disabled>Project status</button>
+      <button id="new-run" class="primary" type="button" aria-controls="run-panel" aria-expanded="false" disabled>New run</button>
+    </div>
+  </header>
+  <section id="run-panel" class="run-panel" aria-label="New run" hidden>
+    <div class="toolbar">
+      <label for="run-contract">Saved contract</label>
+      <select id="run-contract"></select>
+      <button id="preview-run" type="button" disabled>Preview run</button>
+    </div>
+    <div id="run-confirmation" class="confirmation" hidden>
+      <p id="run-description"></p>
+      <div class="toolbar">
+        <button id="confirm-run" class="primary" type="button">Confirm run</button>
+        <button id="dismiss-run" type="button">Dismiss</button>
+      </div>
+    </div>
+    <p id="run-feedback" class="feedback" role="status"></p>
+  </section>
+  <p id="project-feedback" class="feedback project-feedback" role="status"></p>
+  <main>
+    <aside aria-labelledby="runs-heading">
+      <div class="runs-toolbar">
+        <h2 id="runs-heading">Runs</h2>
+        <div class="view-switch" role="group" aria-label="Run view">
+          <button id="show-list" type="button" aria-controls="runs-list" aria-pressed="true">List</button>
+          <button id="show-board" type="button" aria-controls="runs-board" aria-pressed="false">Kanban</button>
+        </div>
+      </div>
+      <div id="board-filter" hidden>
+        <label for="board-plan">Plan</label>
+        <select id="board-plan"><option value="">All plans</option></select>
+      </div>
+      <div id="runs-list"></div>
+      <div id="runs-board" class="runs-board" hidden></div>
+      <details id="history" hidden>
+        <summary>Command history</summary>
+        <div id="command-list"></div>
+      </details>
+    </aside>
+    <section id="detail" aria-labelledby="task-heading">
+      <div class="detail-header">
+        <div>
+          <h2 id="task-heading">Run details</h2>
+          <div id="task-summary" class="task-summary"></div>
+        </div>
+        <button id="preview-cancel" class="danger" type="button" hidden>Cancel run</button>
+      </div>
+      <div id="cancel-confirmation" class="confirmation" hidden>
+        <p id="cancel-description"></p>
+        <div class="toolbar">
+          <button id="confirm-cancel" class="danger" type="button">Confirm cancellation</button>
+          <button id="dismiss-cancel" type="button">Dismiss</button>
+        </div>
+      </div>
+      <p id="task-feedback" class="feedback" role="status"></p>
+      <div id="tabs" class="tabs" role="tablist" aria-label="Run details" hidden>
+        <button id="tab-timeline" type="button" role="tab" aria-controls="panel-timeline" aria-selected="true">Timeline</button>
+        <button id="tab-output" type="button" role="tab" aria-controls="panel-output" aria-selected="false" tabindex="-1">Output</button>
+        <button id="tab-verification" type="button" role="tab" aria-controls="panel-verification" aria-selected="false" tabindex="-1">Verification</button>
+      </div>
+      <p id="empty-detail" class="empty">Select a run to see its activity.</p>
+      <button id="open-contract" type="button" hidden>Preview saved contract</button>
+      <div id="panel-timeline" class="tab-panel" role="tabpanel" aria-labelledby="tab-timeline" tabindex="0" hidden></div>
+      <div id="panel-output" class="tab-panel" role="tabpanel" aria-labelledby="tab-output" tabindex="0" hidden>
+        <button id="load-result" type="button" hidden>Load result</button>
+        <div id="output-content"></div>
+      </div>
+      <div id="panel-verification" class="tab-panel" role="tabpanel" aria-labelledby="tab-verification" tabindex="0" hidden>
+        <div id="verification-summary"></div>
+        <button id="run-check" type="button" hidden>Run check</button>
+        <div id="check-content"></div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

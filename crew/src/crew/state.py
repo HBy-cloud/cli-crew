@@ -10,12 +10,11 @@ from typing import Any, Iterator
 
 from crew import procutil
 from crew.common import (
-    EXIT_BUSY, EXIT_DUP, EXIT_GUARD, CrewError, atomic_write_json, is_within, now_iso, read_json,
+    EXIT_BUSY, EXIT_DUP, EXIT_GUARD, EXIT_USAGE, CrewError, atomic_write_json, is_within, now_iso, read_json,
     resolve_nearest,
 )
 
 RESERVE_WAIT_S = 10.0
-RESERVE_STALE_S = 30.0
 
 ACTIVE_STATES = {"RUNNING", "ORPHANED"}
 
@@ -74,7 +73,10 @@ class Runs:
         p = self.state_path(task_id)
         if not p.exists():
             return None
-        return read_json(p)
+        try:
+            return read_json(p)
+        except ValueError as e:  # JSONDecodeError and UnicodeDecodeError
+            raise CrewError(EXIT_USAGE, f"corrupt state file {p}: {e}") from e
 
     def save_state(self, state: dict[str, Any]) -> None:
         atomic_write_json(self.state_path(state["task_id"]), state)
@@ -133,11 +135,32 @@ class Runs:
             return out
         for p in sorted(self.active.glob("*.json")):
             try:
-                out.append(read_json(p))
-            except (OSError, json.JSONDecodeError):
+                out.append(_read_active(p))
+            except FileNotFoundError:
+                continue  # released between glob and read
+            except json.JSONDecodeError:
                 out.append({"task_id": p.stem, "mode": "write", "crew_pid": None,
                             "worker_pid": None, "corrupt": True})
+            except OSError:
+                # Still unreadable after retries (e.g. a Windows sharing violation that did not clear). The owner may be
+                # alive, so count it as an active write but never reclaim it.
+                out.append({"task_id": p.stem, "mode": "write", "crew_pid": None,
+                            "worker_pid": None, "unreadable": True})
         return out
+
+
+def _read_active(path: Path, timeout_s: float = 2.0) -> Any:
+    """read_json, retrying PermissionError while the owner atomically replaces the file (Windows sharing violation)."""
+    deadline = time.monotonic() + timeout_s
+    delay = 0.01
+    while True:
+        try:
+            return read_json(path)
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 0.2)
 
 
 def rejected_chain_count(reg: dict[str, dict[str, Any]], retry_of: str | None) -> int:
@@ -179,52 +202,88 @@ def retry_of_problem(reg: dict[str, dict[str, Any]], task_id: str, retry_of: str
 # ------------------------------------------------------------ reservation
 
 class ReserveLock:
-    """Exclusive critical section via O_CREAT|O_EXCL on locks/reserve.lock."""
+    """Exclusive critical section via an OS lock on locks/reserve.lock (msvcrt.locking or fcntl.flock).
+
+    The OS releases the lock when the holder exits or dies, so there is no stale reclaim. The file itself is kept:
+    deleting it would let a waiter lock an unlinked file while a newcomer locks a fresh one.
+    """
 
     def __init__(self, runs: Runs, wait_s: float = RESERVE_WAIT_S):
         self.runs = runs
         self.wait_s = wait_s
         self.held = False
+        self._fd: int | None = None
 
     def __enter__(self) -> "ReserveLock":
         self.runs.ensure()
         deadline = time.monotonic() + self.wait_s
-        while True:
-            try:
-                fd = os.open(self.runs.reserve_lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump({"crew_pid": os.getpid(), "created": time.time()}, f)
-                self.held = True
-                return self
-            except (FileExistsError, PermissionError):
-                # PermissionError: Windows "delete pending" while the holder is releasing
-                self._maybe_reclaim()
+        path = self.runs.contained(self.runs.reserve_lock)
+        if path.is_symlink():  # O_NOFOLLOW does not exist on Windows; the old O_EXCL design never followed links
+            raise CrewError(EXIT_GUARD, f"{path} is a link; remove it")
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o644)
+        try:
+            while not _try_lock(fd):
                 if time.monotonic() >= deadline:
                     raise CrewError(EXIT_BUSY, "could not acquire reservation lock (another crew run is reserving)")
                 time.sleep(0.1)
-
-    def _maybe_reclaim(self) -> None:
-        p = self.runs.reserve_lock
-        try:
-            info = read_json(p)
-            pid = info.get("crew_pid")
-            created = float(info.get("created", 0))
-        except (OSError, ValueError, json.JSONDecodeError):
-            try:
-                created = p.stat().st_mtime
-            except OSError:
-                return
-            pid = None
-        if not procutil.pid_alive(pid) and time.time() - created > RESERVE_STALE_S:
-            try:
-                p.unlink()
-            except OSError:
-                pass
+            self._fd = fd
+            self.held = True
+            _write_holder(fd)
+            return self
+        except BaseException:
+            if self._fd is None:
+                os.close(fd)
+            else:
+                self.__exit__()
+            raise
 
     def __exit__(self, *exc) -> None:
-        if self.held:
-            _unlink_with_retry(self.runs.reserve_lock)
-            self.held = False
+        if self._fd is not None:
+            fd, self._fd = self._fd, None
+            try:
+                _unlock(fd)
+            finally:
+                os.close(fd)  # closing also releases the lock
+                self.held = False
+        self.held = False
+
+
+def _try_lock(fd: int) -> bool:
+    if os.name == "nt":
+        import msvcrt
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+    import fcntl
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
+
+
+def _unlock(fd: int) -> None:
+    if os.name == "nt":
+        import msvcrt
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+def _write_holder(fd: int) -> None:
+    """Diagnostic only: who holds the lock. Nothing reads it to decide ownership."""
+    data = json.dumps({"crew_pid": os.getpid(), "created": time.time()}).encode("utf-8")
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.ftruncate(fd, 0)
+        os.write(fd, data)
+    except OSError:
+        pass
 
 
 def _unlink_with_retry(path: Path, timeout_s: float = 5.0) -> None:
@@ -263,6 +322,9 @@ def cleanup_stale(runs: Runs) -> list[str]:
     for entry in runs.list_active():
         tid = entry.get("task_id")
         if not tid or procutil.same_process(entry.get("crew_pid"), entry.get("crew_create_time")):
+            continue
+        if entry.get("unreadable"):
+            notes.append(f"{tid}: active reservation file is unreadable; left in place (not reclaimed)")
             continue
         wpid = entry.get("worker_pid")
         if wpid and procutil.same_process(wpid, entry.get("worker_create_time")):

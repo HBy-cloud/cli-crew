@@ -288,6 +288,20 @@ class ClassifyTests(unittest.TestCase):
     def test_worker_failed(self):
         self.assertEqual(self.c(final_text="## RESULT\nSTATUS: failed\n"), "FAILED")
 
+    def test_tool_output_does_not_trigger_usage_limit_or_transient(self):
+        out = ["quota exceeded while fetching fixture; HTTP 429 at line 503"]
+        run = lambda p, rc=0: classify.classify(p, exit_code=rc, timed_out=False, cancelled=False)[:2]
+        self.assertEqual(run(Parsed(final_text=self.OK, tool_output=out)), ("DONE", None))
+        self.assertEqual(run(Parsed(final_text=self.OK, tool_output=out), rc=1), ("FAILED", "exit_1"))
+        self.assertEqual(run(Parsed(final_text="", tool_output=out)), ("FAILED", "empty_response"))
+        self.assertEqual(run(Parsed(final_text=self.OK, diag=["HTTP 503"]), rc=1), ("FAILED", "transient"))
+        self.assertEqual(run(Parsed(final_text=self.OK, diag=["You exceeded your usage limit"])), ("FAILED", "usage_limit"))
+
+    def test_tool_output_still_carries_sandbox_signals(self):
+        run = lambda p: classify.classify(p, exit_code=0, timed_out=False, cancelled=False)[0]
+        self.assertEqual(run(Parsed(final_text=self.OK, tool_output=["CreateProcessAsUserW failed: 5"])), "DONE_UNVERIFIED")
+        self.assertEqual(run(Parsed(final_text=self.OK, tool_output=["patch rejected"])), "BLOCKED")
+
 
 # ------------------------------------------------------------ adapters
 
@@ -562,7 +576,8 @@ class RunTests(Base):
         with patch.object(st.ReserveLock, "__enter__", interrupt_after_lock_created):
             code, state = self.run_task()
         self.assertEqual(code, 130, state)
-        self.assertFalse(self.runs.reserve_lock.exists())
+        with st.ReserveLock(self.runs, wait_s=0.5):  # the OS lock was released (the file itself is kept)
+            pass
         self.assertFalse(self.runs.list_active())
         self.assertEqual(self.run_task(tid="T-2", mode="write", wp="[src]")[0], 0)
 
@@ -900,6 +915,7 @@ class MiscTests(Base):
         self.assertTrue(bad.exists())
         code, out, _ = crew("clean", "--runs", "--yes")
         self.assertIsNone(self.runs.load_state("T-1"))
+        self.assertTrue((self.runs.contracts / "T-1.md").is_file())  # SPEC 4.10: contracts are not run files
         self.assertIn("T-1", self.runs.registry())  # history keeps the id
         code, _, _ = crew("contract", "new", "T-1")
         self.assertEqual(code, 5)
@@ -1101,6 +1117,264 @@ class EnforcementGapTests(Base):
         self.assertEqual(code, 3)
         self.assertIn("approve-data-sharing", err)
         self.assertEqual(crew("run", "--contract", str(p), "--approve-data-sharing")[0], 0)
+
+
+# ------------------------------------------------------------ evaluation fixes
+
+class EvalFixTests(Base):
+    def test_codex_failed_command_output_is_tool_output(self):
+        events, stderr, result = self.root / "events", self.root / "stderr", self.root / "result"
+        stderr.write_text("", encoding="utf-8")
+        result.write_text("## RESULT\nSTATUS: success\nCHANGED_FILES: none\n", encoding="utf-8")
+        events.write_text("\n".join(json.dumps(e) for e in [
+            {"type": "thread.started", "thread_id": "t"},
+            {"type": "item.completed", "item": {"type": "command_execution", "status": "failed",
+                                                "aggregated_output": "insufficient_quota in test data"}},
+        ]), encoding="utf-8")
+        parsed = parse("codex", events, stderr, result)
+        self.assertEqual(parsed.tool_output, ["insufficient_quota in test data"])
+        self.assertFalse(any("quota" in line for line in parsed.diag))
+        self.assertEqual(classify.classify(parsed, exit_code=0, timed_out=False, cancelled=False)[0], "DONE")
+
+    def test_unreadable_active_file_is_not_reclaimed(self):
+        from unittest import mock
+        self.runs.ensure()
+        self.runs.active.mkdir(parents=True, exist_ok=True)
+        ap = self.runs.active_path("T-live")
+        ap.write_text(json.dumps({"task_id": "T-live", "mode": "write", "crew_pid": None}), encoding="utf-8")
+        self.runs.save_state({"task_id": "T-live", "status": "RUNNING"})
+        with mock.patch.object(st, "_read_active", side_effect=PermissionError("sharing violation")):
+            entry, = self.runs.list_active()
+            self.assertTrue(entry["unreadable"])
+            self.assertEqual(entry["mode"], "write")
+            notes = st.cleanup_stale(self.runs)
+        self.assertTrue(ap.exists())
+        self.assertEqual(self.runs.load_state("T-live")["status"], "RUNNING")
+        self.assertIn("unreadable", notes[0])
+
+    def test_active_read_retries_transient_permission_error(self):
+        from unittest import mock
+        path = self.root / "active.json"
+        path.write_text(json.dumps({"task_id": "T-x"}), encoding="utf-8")
+        real = st.read_json
+        calls = []
+
+        def flaky(p):
+            calls.append(p)
+            if len(calls) == 1:
+                raise PermissionError("sharing violation")
+            return real(p)
+        with mock.patch.object(st, "read_json", side_effect=flaky):
+            self.assertEqual(st._read_active(path), {"task_id": "T-x"})
+        self.assertEqual(len(calls), 2)
+
+    def test_copilot_auto_any_case_is_unresolved_for_cost_gate(self):
+        from crew import runner
+        for model in ("auto", "Auto", "AUTO"):
+            s = {"agent": "copilot", "effort": "low", "model": model}
+            self.assertIn("could not be determined", runner.cost_gate(s, {"approval_models": ["m"]}, False))
+            self.assertIsNone(s["model_resolved"])
+
+    def test_copilot_auto_any_case_passes_lowercase_cli_model(self):
+        from crew import adapters
+        for model, expected in ((None, "auto"), ("Auto", "auto"), (" AUTO ", "auto"), ("gpt-x", "gpt-x")):
+            self.assertEqual(adapters.copilot_model(model) or "auto", expected)
+
+
+class ReserveLockTests(Base):
+    """OS file lock for the reservation critical section."""
+
+    def test_held_lock_blocks_then_releases(self):
+        with st.ReserveLock(self.runs):
+            with self.assertRaises(CrewError) as ctx:
+                with st.ReserveLock(self.runs, wait_s=0.3):
+                    pass
+            self.assertEqual(ctx.exception.code, 4)
+        with st.ReserveLock(self.runs, wait_s=0.3):
+            pass
+        self.assertTrue(self.runs.reserve_lock.is_file())  # kept on purpose
+
+    def test_leftover_file_from_dead_holder_does_not_block(self):
+        self.runs.ensure()
+        self.runs.reserve_lock.parent.mkdir(parents=True, exist_ok=True)
+        self.runs.reserve_lock.write_text(json.dumps({"crew_pid": 999999, "created": 0}), encoding="utf-8")
+        with st.ReserveLock(self.runs, wait_s=0.3):
+            pass
+        holder = json.loads(self.runs.reserve_lock.read_text(encoding="utf-8"))  # Windows locks block other readers
+        self.assertEqual(holder["crew_pid"], os.getpid())
+
+    def test_linked_lock_file_is_refused(self):
+        self.runs.ensure()
+        target = self.root / "elsewhere.lock"
+        target.write_text("", encoding="utf-8")
+        try:
+            self.runs.reserve_lock.symlink_to(target)
+        except OSError:
+            self.skipTest("symlink privilege not available")
+        with self.assertRaises(CrewError) as ctx:
+            with st.ReserveLock(self.runs, wait_s=0.3):
+                pass
+        self.assertEqual(ctx.exception.code, 3)
+
+    def test_lock_held_by_another_process_blocks(self):
+        self.runs.ensure()
+        self.runs.reserve_lock.parent.mkdir(parents=True, exist_ok=True)
+        src = str(Path(__file__).resolve().parents[1] / "src")
+        code = ("import sys, time; sys.path.insert(0, sys.argv[1]); from pathlib import Path; "
+                "from crew import state as st; lock = st.ReserveLock(st.Runs(Path(sys.argv[2]))); lock.__enter__(); "
+                "print('held', flush=True); time.sleep(30)")
+        proc = subprocess.Popen([sys.executable, "-c", code, src, str(self.root)], stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(proc.stdout.readline().strip(), "held")
+            with self.assertRaises(CrewError):
+                with st.ReserveLock(self.runs, wait_s=0.3):
+                    pass
+        finally:
+            proc.kill()
+            proc.wait()
+            proc.stdout.close()
+        with st.ReserveLock(self.runs, wait_s=2):  # the OS released the dead holder's lock
+            pass
+
+
+class CopilotRunTests(Base):
+    """Copilot end-to-end through `crew run` with the fake worker."""
+
+    def setUp(self):
+        super().setUp()
+        # A dedicated profile outside the project (sibling under tests/_work; not removed, no deletion in tests).
+        self.profile = self.root.parent / f"{self.root.name}-copilot-profile"
+        self.profile.mkdir()
+        os.environ["COPILOT_HOME"] = str(self.profile)
+        (self.root / "README.md").write_text("# project\n", encoding="utf-8")
+
+    def run_copilot(self, scenario="copilot_write", tid="T-cp"):
+        os.environ["FAKE_SCENARIO"] = scenario
+        p = self.contract(tid=tid, agent="copilot", mode="write", wp="[README.md]")
+        code, out, err = crew("run", "--contract", str(p))
+        return code, self.runs.load_state(tid) or {}, out + err
+
+    def test_single_file_write_is_done(self):
+        code, s, out = self.run_copilot()
+        self.assertEqual(code, 0, out)
+        self.assertEqual((s["status"], s["boundary_violations"]), ("DONE", []))
+        self.assertEqual(s["model_actual"], "fake-copilot-model")
+        self.assertIn("edited by copilot", (self.root / "README.md").read_text(encoding="utf-8"))
+
+    def test_copilot_env_is_scrubbed_and_controlled(self):
+        os.environ["COPILOT_ALLOW_ALL"] = "true"
+        os.environ["COPILOT_CUSTOM_SETTING"] = "x"
+        code, s, out = self.run_copilot("copilot_env")
+        self.assertEqual(code, 0, out)
+        text = (self.runs.dir / "T-cp.a1.result.md").read_text(encoding="utf-8")
+        self.assertIn("ALLOW_ALL=false", text)
+        self.assertNotIn("COPILOT_CUSTOM_SETTING", text)
+        self.assertIn("COPILOT_HOME", text)
+
+    def test_hooks_enabled_profile_is_refused(self):
+        os.environ["FAKE_COPILOT_HOOKS"] = "false"
+        code, s, out = self.run_copilot()
+        self.assertEqual(code, 3, out)
+        self.assertIn("disableAllHooks", out)
+        self.assertEqual((self.root / "README.md").read_text(encoding="utf-8"), "# project\n")
+
+    def test_profile_with_saved_permissions_is_refused(self):
+        (self.profile / "permissions-config.json").write_text("{}", encoding="utf-8")
+        code, s, out = self.run_copilot()
+        self.assertEqual(code, 3, out)
+        self.assertIn("permissions-config.json", out)
+
+
+class SubagentDetectionTests(Base):
+    """Codex rollout and Claude subagent_stats detection."""
+
+    def test_codex_rollouts_follow_descendants_and_skip_old_files(self):
+        import time
+        from crew.subagents import codex_rollouts
+        sessions =self.root / "_codex_home" / "sessions" / "2026"
+        sessions.mkdir(parents=True)
+
+        def rollout(name, meta, extra=()):
+            path = sessions / f"rollout-{name}.jsonl"
+            lines = [json.dumps({"type": "session_meta", "payload": meta}), *map(json.dumps, extra)]
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            return path
+        rollout("main", {"id": "t-main"}, [{"type": "turn_context", "payload": {"model": "m-1"}}])
+        rollout("child", {"id": "t-child", "parent_thread_id": "t-main"})
+        rollout("grandchild", {"id": "t-grand", "source": {"subagent": {"thread_spawn": {"parent_thread_id": "t-child"}}}})
+        rollout("other", {"id": "t-other", "parent_thread_id": "unrelated"})
+        old = rollout("old-child", {"id": "t-old", "parent_thread_id": "t-main"})
+        os.utime(old, (1_000_000_000, 1_000_000_000))
+        found = codex_rollouts("t-main", time.time() - 60)
+        self.assertTrue(found["main"].endswith("rollout-main.jsonl"))
+        self.assertEqual({c["thread_id"] for c in found["children"]}, {"t-child", "t-grand"})
+        self.assertEqual(found["model"], "m-1")
+
+    def outside_codex_home(self):
+        # Rollouts live outside the project, as in a real ~/.codex; a sibling under tests/_work (not removed).
+        home = self.root.parent / f"{self.root.name}-codex-home"
+        os.environ["CODEX_HOME"] = str(home)
+        return home
+
+    def test_codex_subagent_is_a_violation_unless_allowed(self):
+        self.outside_codex_home()
+        code, s = self.run_task("codex_subagent")
+        self.assertEqual(code, 11, s)
+        self.assertEqual(s["boundary_violations"], [])
+        self.assertTrue(s["subagent_used"])
+        self.assertTrue(s["subagent_violation"])
+        self.assertEqual(s["model_actual"], "fake-codex-model")
+
+    def test_codex_subagent_allowed_in_read_mode(self):
+        self.outside_codex_home()
+        code, s = self.run_task("codex_subagent", tid="T-ok", sub="true")
+        self.assertEqual(code, 0, s)
+        self.assertTrue(s["subagent_used"])
+        self.assertFalse(s["subagent_violation"])
+
+    def test_claude_subagent_is_a_violation(self):
+        code, s = self.run_task("claude_subagent", agent="claude")
+        self.assertEqual(code, 11, s)
+        self.assertTrue(s["subagent_used"])
+        self.assertTrue(s["subagent_violation"])
+
+
+class EvalRestTests(Base):
+    """Remaining evaluation fixes."""
+
+    def test_detect_warns_for_codex_and_anthropic_token_vars(self):
+        for var in ("CODEX_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+            os.environ[var] = "VAL-X-7731"
+            code, out, _ = crew("detect", "--json")
+            self.assertEqual(code, 0)
+            self.assertIn(var, json.loads(out)["api_key_env_present"])
+            self.assertNotIn("VAL-X-7731", out)
+            del os.environ[var]
+
+    def test_guard_refused_handoff_run_creates_no_handoff_dir(self):
+        p = self.contract(tid="T-hg", effort="high")
+        p.write_text(p.read_text(encoding="utf-8").replace("ephemeral: false", "ephemeral: false\nworker_handoff: true"),
+                     encoding="utf-8")
+        code, out, err = crew("run", "--contract", str(p))
+        self.assertEqual(code, 3, out + err)
+        self.assertIn("--approve-cost", err)
+        self.assertFalse((self.root / "handoffs").exists())
+
+    def test_corrupt_state_file_is_a_crew_error(self):
+        self.runs.ensure()
+        self.runs.state_path("T-bad").write_text("{not json", encoding="utf-8")
+        code, _, err = crew("result", "T-bad")
+        self.assertEqual(code, 2, err)
+        self.assertIn("corrupt state file", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_invalid_config_is_a_crew_error(self):
+        cfg = self.root / "bad-config.toml"
+        cfg.write_text("max_concurrent = [\n", encoding="utf-8")
+        os.environ["CREW_CONFIG"] = str(cfg)
+        code, _, err = crew("detect")
+        self.assertEqual(code, 2, err)
+        self.assertIn("invalid config file", err)
 
 
 if __name__ == "__main__":

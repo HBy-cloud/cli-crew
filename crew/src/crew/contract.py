@@ -185,11 +185,21 @@ def parse_sections(body: str) -> dict[str, str]:
     return sections
 
 
-def load(path: str | os.PathLike) -> Contract:
+def load(path: str | os.PathLike, *, expected_digest: str | None = None) -> Contract:
     p = Path(path)
     if not p.exists():
         raise ContractError(f"contract not found: {p}")
-    text = p.read_text(encoding="utf-8")
+    if expected_digest is None:
+        text = p.read_text(encoding="utf-8")
+    else:
+        from hashlib import sha256
+
+        if p.resolve() != p:
+            raise ContractError("the contract is linked elsewhere")
+        content = p.read_bytes()
+        if sha256(content).hexdigest() != expected_digest:
+            raise ContractError("the contract changed after preview; review it again")
+        text = content.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
     data, body = parse_frontmatter(text)
     unknown = [k for k in data if k not in FIELDS]
     fields = dict(FIELDS)

@@ -30,7 +30,9 @@ The following private records may be present in a maintainer checkout:
 4. After code changes run `py -3 -m unittest discover -s tests` from `crew/` and report the real result.
    Never claim tests passed unless they ran.
 5. Do not commit, push, publish, delete user data, or change files outside this repository
-   (including `~/.claude`, `~/.codex`, `~/.gemini`, `~/.crew`) without an explicit request.
+   (including `~/.claude`, `~/.codex`, `~/.gemini`, `~/.crew`) without an explicit request. Commit messages are
+   one English line, `<type>: <description>` (`feat`, `fix`, `docs`, `refactor`). In a maintainer checkout, follow
+   the maintainer commit and publish rules referenced in `docs/SPEC.md` §2 before any commit or publish.
 6. Never read or print secrets (.env, keys, tokens). Real-CLI smoke tests must run only inside a throwaway project
    under `crew/tests/_work/` (git-ignored); any smoke test against this repository itself must be read-only.
 7. On Windows, use `py -3`; `python` may resolve to the Microsoft Store stub. For development, install the tool
@@ -47,7 +49,8 @@ The following private records may be present in a maintainer checkout:
    deletion and cleanup logic with the delete calls stubbed out.
 
 ## Handoffs
-- Handoffs are local records; `handoffs/` is git-ignored and not published.
+- Handoffs are local records and are never published (`handoffs/` is git-ignored in public checkouts; a maintainer
+  checkout may track it).
 - On finishing or stopping work, create `handoffs/YYYY-MM-DD/HHmm-<agent>-<task>.md` (real local clock time;
   lowercase letters, digits, hyphens), directly or via `crew handoff`. Do not edit prior handoffs (only fill in
   the `TODO` placeholders of a draft just created by `crew handoff`).

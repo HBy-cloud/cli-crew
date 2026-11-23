@@ -14,10 +14,11 @@ from typing import Any
 from crew import adapters, classify, procutil, safety, snapshot, state as st
 from crew.common import (
     EXIT_CANCEL, EXIT_GUARD, EXIT_NOT_DONE, EXIT_OK, EXIT_USAGE, EXIT_VIOLATION, HIGH_EFFORTS,
-    CrewError, atomic_write_json, atomic_write_text, now_iso, read_json, read_text,
+    CrewError, atomic_write_json, atomic_write_text, read_json, read_text,
 )
 from crew.contract import CheckResult
 from crew.subagents import agy_conversation_paths, codex_rollouts
+from crew.trace import ActivityRecorder, trace_timestamp
 
 HARD_TIMEOUT_GRACE_S = 60
 POLL_S = 0.5
@@ -201,8 +202,8 @@ def cost_gate(s: dict[str, Any], cfg: dict[str, Any], approved: bool) -> str | N
         reasons.append(f"effort {s['effort']}")
     approval = cfg.get("approval_models") or []
     model = s.get("model") or default_model(s["agent"])
-    if s["agent"] == "copilot" and model == "auto":
-        model = None
+    if s["agent"] == "copilot":
+        model = adapters.copilot_model(model)
     s["model_resolved"] = model
     if approval:
         if model is None:
@@ -254,10 +255,12 @@ def _subagent_evidence(agent: str, parsed: adapters.Parsed, started_epoch: float
 
 
 def _wait(proc: subprocess.Popen, hard_timeout_s: float, cancel_request: Path,
-          started: float | None) -> tuple[int | None, bool]:
+          started: float | None, activity: ActivityRecorder | None = None) -> tuple[int | None, bool]:
     deadline = time.monotonic() + hard_timeout_s
     while True:
         rc = proc.poll()
+        if activity:
+            activity.record(finished=rc is not None)
         if rc is not None:
             return rc, False
         if cancel_request.is_file():
@@ -302,13 +305,14 @@ def _record_cancelled_attempt(runs: st.Runs, state: dict[str, Any], pending: dic
     atomic_write_json(f["subagents"], ev)
     _add_file(state, f["subagents"].name)
     attempt.update({
-        "ended": now_iso(), "exit_code": proc.returncode, "status": "CANCELLED",
+        "ended": trace_timestamp(), "exit_code": proc.returncode, "status": "CANCELLED",
         "tokens": parsed.tokens, "cost_usd": parsed.cost_usd,
         "failure_reason": "cancelled", "worker_status": None, "session_ref": parsed.session_ref,
         "subagent_used": ev["used"], "session_paths": ev["session_paths"], "log": f["log"].name,
         "events": f["events"].name, "result": f["result"].name, "subagents": f["subagents"].name,
     })
     state["attempts"].append(attempt)
+    state.pop("live_attempt", None)
     state["model_actual"] = parsed.model_actual or ev.get("model") or state.get("model_actual")
     if parsed.cost_usd is not None:
         state["cost_usd"] = round((state.get("cost_usd") or 0) + parsed.cost_usd, 6)
@@ -389,7 +393,7 @@ def finalize(runs: st.Runs, state: dict[str, Any], *, root: Path, write_paths_ab
         state["failure_reason"] = state.get("failure_reason") or "not_started"
     if state["status"] == "DONE" and state.get("boundary_check"):
         state["status"] = "DONE_UNVERIFIED"
-    state["ended"] = now_iso()
+    state["ended"] = trace_timestamp()
     state["ended_epoch"] = time.time()
     try:
         state["duration_s"] = round(time.time() - state["started_epoch"], 1)
@@ -422,7 +426,6 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
         slot = handoff_slot(root, s["agent"], s["task_id"])
         if (root / slot).exists():
             raise CrewError(EXIT_GUARD, f"handoff file already exists: {slot}")
-        (root / slot).parent.mkdir(parents=True, exist_ok=True)
         s["handoff_slot"] = slot
         s["cli_mode"] = "write"
     scan = safety.scan_instructions(safety.instruction_dirs(root, Path.cwd(), s.get("write_paths") or [],
@@ -448,7 +451,7 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
     env["AGENT_ROLE"] = "WORKER"
     env["PYTHONIOENCODING"] = "utf-8"
 
-    started = now_iso()
+    started = trace_timestamp()
     state: dict[str, Any] = {
         "task_id": tid, "status": "RUNNING", "agent": s["agent"], "cli_version": version,
         "mode": s["mode"], "task_kind": s.get("task_kind"), "effort": s["effort"], "model_requested": s.get("model"),
@@ -504,6 +507,8 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
                     pass
                 notes = st.reserve(runs, tid, s["mode"], int(cfg["max_concurrent"]), state)
                 reserved = True
+            if s.get("handoff_slot"):  # only after every guard and the reservation have passed
+                (root / s["handoff_slot"]).parent.mkdir(parents=True, exist_ok=True)
             if notes:
                 state["message"] = "; ".join(notes)
 
@@ -532,7 +537,12 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
                 state["env_stripped"] = stripped
                 a_started = time.time()
                 logged_args = inv.args[:-1] if s["agent"] in ("agy", "copilot") else inv.args
-                attempt: dict[str, Any] = {"n": n, "started": now_iso(), "args": logged_args}
+                attempt: dict[str, Any] = {"n": n, "started": trace_timestamp(), "args": logged_args}
+                trace_path = runs.file(f"{tid}.a{n}.trace.jsonl")
+                children_path = runs.file(f"{tid}.a{n}.trace-children.json")
+                _add_file(state, trace_path.name)
+                _add_file(state, children_path.name)
+                activity = ActivityRecorder(s["agent"], f["events"], trace_path, children_path)
                 with defer_interrupt():
                     proc = procutil.spawn(inv.args, cwd=str(root), env=env,
                                           stdin_path=prompt_path if inv.stdin_text is not None else None,
@@ -543,13 +553,16 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
                     state["cancel_request"] = cancel_request.name
                     _add_file(state, cancel_request.name)
                     attempt["worker_pid"], attempt["worker_create_time"] = proc.pid, ct
-                    pending.update(proc=proc, attempt=attempt, f=f, a_started=a_started)
+                    pending.update(proc=proc, attempt=attempt, f=f, a_started=a_started, activity=activity)
+                    state["live_attempt"] = {"n": n, "started": attempt["started"]}
                     st.update_active_worker(runs, tid, proc.pid, ct)
                     runs.save_state(state)
                 hard_s = s["timeout_min"] * 60 + HARD_TIMEOUT_GRACE_S
                 if os.environ.get("CREW_TEST_HARD_TIMEOUT_S"):  # test hook: can only shorten
                     hard_s = min(hard_s, float(os.environ["CREW_TEST_HARD_TIMEOUT_S"]))
-                rc, timed_out = _wait(proc, hard_s, cancel_request, ct)
+                rc, timed_out = _wait(proc, hard_s, cancel_request, ct, activity)
+                if timed_out:
+                    activity.record(finished=True)
                 parsed = adapters.parse(s["agent"], f["events"], f["log"], f["result"])
                 if s["agent"] != "codex" and parsed.final_text and not f["result"].exists():
                     atomic_write_text(f["result"], parsed.final_text)
@@ -558,13 +571,14 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
                 atomic_write_json(f["subagents"], ev)
                 _add_file(state, f["subagents"].name)
                 attempt.update({
-                    "ended": now_iso(), "exit_code": rc, "status": status, "failure_reason": reason,
+                    "ended": trace_timestamp(), "exit_code": rc, "status": status, "failure_reason": reason,
                     "tokens": parsed.tokens, "cost_usd": parsed.cost_usd,
                     "worker_status": ws, "session_ref": parsed.session_ref, "subagent_used": ev["used"],
                     "session_paths": ev["session_paths"], "log": f["log"].name, "events": f["events"].name,
                     "result": f["result"].name, "subagents": f["subagents"].name,
                 })
                 state["attempts"].append(attempt)
+                state.pop("live_attempt", None)
                 pending.clear()
                 state["model_actual"] = parsed.model_actual or ev.get("model") or state.get("model_actual")
                 if parsed.cost_usd is not None:
@@ -586,6 +600,7 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
                 if cancel_count > 1:
                     raise Cancelled()
                 if pending:
+                    pending["activity"].record(finished=True)
                     _record_cancelled_attempt(runs, state, pending)
                 finalize(runs, state, root=root, write_paths_abs=chk.write_paths_abs, cancelled=True)
             except Cancelled:
@@ -612,16 +627,24 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
     return state
 
 
-def cancel(root: Path, runs: st.Runs, task_id: str, yes: bool, target: str | None = None) -> tuple[int, str]:
+def cancel_target(runs: st.Runs, task_id: str) -> tuple[dict, int, float]:
     state = runs.load_state(task_id)
     if not state:
-        return EXIT_USAGE, f"unknown task: {task_id}"
+        raise CrewError(EXIT_USAGE, f"unknown task: {task_id}")
     if state.get("status") not in ("RUNNING", "ORPHANED"):
-        return EXIT_GUARD, f"{task_id} is {state.get('status')}; nothing to cancel"
+        raise CrewError(EXIT_GUARD, f"{task_id} is {state.get('status')}; nothing to cancel")
     wpid = state.get("worker_pid")
     started = state.get("worker_create_time")
     if not wpid or started is None or not procutil.same_process(wpid, started):
-        return EXIT_GUARD, f"{task_id}: cannot verify worker identity; no cancellation requested"
+        raise CrewError(EXIT_GUARD, f"{task_id}: cannot verify worker identity; no cancellation requested")
+    return state, wpid, started
+
+
+def cancel(root: Path, runs: st.Runs, task_id: str, yes: bool, target: str | None = None) -> tuple[int, str]:
+    try:
+        state, wpid, started = cancel_target(runs, task_id)
+    except CrewError as exc:
+        return exc.code, exc.message
     identity = f"{wpid}:{started}"
     if target is not None and identity != target:
         return EXIT_GUARD, f"{task_id}: worker changed; preview cancellation again"
@@ -634,7 +657,10 @@ def cancel(root: Path, runs: st.Runs, task_id: str, yes: bool, target: str | Non
             return EXIT_GUARD, f"{task_id}: older controller; cancel in its running terminal"
         # The owning controller holds the worker handle and records the interrupted attempt.
         # A request for an earlier attempt cannot cancel its replacement.
-        atomic_write_text(runs.file(request), identity)
+        request_path = runs.file(request)
+        if request_path.parent != runs.dir or request_path.resolve() != request_path:
+            return EXIT_GUARD, f"{task_id}: invalid cancellation request path"
+        atomic_write_text(request_path, identity)
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             latest = runs.load_state(task_id) or {}

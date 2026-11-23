@@ -152,6 +152,13 @@ def copilot_environment(env: dict[str, str], root: Path) -> dict[str, str]:
     return result
 
 
+def copilot_model(model: Any) -> str | None:
+    """Explicit Copilot model id, or None for Auto (null or any case/whitespace variant of 'auto')."""
+    if not isinstance(model, str) or not model.strip() or model.strip().lower() == "auto":
+        return None
+    return model
+
+
 def build(agent: str, s: dict[str, Any], *, root: Path, add_dirs: list[Path], prompt_text: str,
           prompt_rel: str, result_path: Path, cfg: dict[str, Any]) -> Invocation:
     mode = s.get("cli_mode") or s["mode"]
@@ -215,7 +222,7 @@ def build(agent: str, s: dict[str, Any], *, root: Path, add_dirs: list[Path], pr
             "--mode", "interactive", "--available-tools", "view", "apply_patch",
             "--deny-tool=shell", "--deny-tool=memory", *read_denials,
             f"--allow-tool=write({target})", "--max-ai-credits=30", "--output-format=json",
-            f"--model={model or 'auto'}", "-p", prompt_text,
+            f"--model={copilot_model(model) or 'auto'}", "-p", prompt_text,
         ]
         if os.name == "nt" and len(subprocess.list2cmdline(args).encode("utf-16-le")) // 2 > 30000:
             raise CrewError(EXIT_USAGE, "copilot command line too long; shorten the contract")
@@ -234,6 +241,9 @@ class Parsed:
     final_text: str = ""
     transcript: str = ""
     diag: list[str] = field(default_factory=list)  # diagnostic-channel lines
+    # Output of failed worker tool commands: may contain permission/sandbox signals, but also arbitrary program text,
+    # so it is used only for BLOCKED/UNVERIFIED matching, never for usage-limit or transient matching.
+    tool_output: list[str] = field(default_factory=list)
     session_ref: str | None = None
     model_actual: str | None = None
     cost_usd: float | None = None
@@ -298,7 +308,7 @@ def parse(agent: str, stdout_path: Path, stderr_path: Path, result_path: Path) -
             if item.get("type") == "error":
                 p.diag.append(str(item.get("message", "")))
             if item.get("type") == "command_execution" and item.get("status") == "failed":
-                p.diag.append(str(item.get("aggregated_output", ""))[:2000])
+                p.tool_output.append(str(item.get("aggregated_output", ""))[:2000])
         p.final_text = read_text(result_path)
 
     elif agent == "agy":

@@ -202,7 +202,7 @@ class PlanTests(PlanHelpers, Base):
 
 
 class ReviewFindingTests(PlanHelpers, Base):
-    """Regression cases from the 2026-11-21 codex review (rev-uncommitted-1)."""
+    """Regression cases from the 2026-11-21 codex review."""
 
     def test_secrets_are_redacted_in_check_and_show(self):
         secret = "sk-" + "a" * 25

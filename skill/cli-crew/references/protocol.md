@@ -49,7 +49,8 @@ The final AGY result event can report an error even when the process exits 0. An
 7. DONE_UNVERIFIED (worker verification blocked by sandbox or final boundary check failed) · 8. DONE.
 Lifecycle: RUNNING, STALE (crew and worker gone), ORPHANED (crew gone, worker alive).
 
-Patterns are matched only on CLI diagnostics, not on the model's answer text.
+Patterns are matched only on CLI diagnostics, not on the model's answer text. Output of a failed worker command (codex
+`command_execution`) counts only for BLOCKED and DONE_UNVERIFIED signals, never for usage-limit or transient matching.
 
 ## Exit codes
 11 violation · 130 cancelled · 10 not DONE · 5 duplicate id · 4 busy · 3 guard/approval (WORKER role, unsafe root or `.agent-runs` link escape, non-file instruction path on `init`, missing `--approve-cost` or `--approve-data-sharing`, `retry_of` chain rejected twice, existing worker handoff slot file, invalid `accept`/`reject`/`compare`/`cancel` state or unverified `--target` worker identity) · 2 usage/contract · 0 ok.
@@ -64,7 +65,8 @@ Patterns are matched only on CLI diagnostics, not on the model's answer text.
 
 ## Concurrency
 Write tasks run alone. Read tasks (including `worker_handoff: true`, which runs the worker in write mode confined by prompt/settings to its handoff slot) run in parallel up to `max_concurrent` (default 3).
-Reservation is atomic (`.agent-runs/locks/reserve.lock`).
+Reservation is atomic: an OS file lock on `.agent-runs/locks/reserve.lock`, released by the OS if the holder dies (the
+file is kept). Do not mix older crew versions on one project while runs are being reserved.
 
 ## Safety controls
 - Worker environment: credential-like variables (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*API_KEY*`, `AWS_*`, ...)
@@ -96,6 +98,14 @@ Use `crew compare <ID> <ID> [--json]` to inspect verification evidence, violatio
 
 `.agent-runs/` (self-gitignored): contracts, state JSON, prompts, per-attempt logs/events/results,
 snapshots, subagent evidence, `history.jsonl` (permanent id registry), `locks/`.
+
+`crew trace view` streams state, recorded verdicts and observed activity from local run records. Reconnecting resumes recent updates or reloads the current view. The selected run has Timeline, Output and Verification tabs. Project status runs the default `crew status`, and a selected run's Output and Verification tabs run `crew result` and `crew check`; these queries record their output locally. The view does not replace main's own verification against the source. For coverage and optional Claude Code hook setup, see the [CLI guide](../../../crew/README.md#live-trace-viewer).
+
+Kanban uses the same records as the list and can be filtered by cplan. Accepted runs are Complete, runs whose status is `RUNNING` are Running, and every other recorded run (awaiting a verdict, rejected, `ORPHANED` or `STALE`) needs review. Unregistered saved contracts appear in Not run; selecting one opens the existing run preview.
+
+On Windows, `crew trace view --interactive codex` starts a foreground Codex session with shared browser and console I/O for direct user interaction. See the [shared CLI session guide](../../../crew/README.md#shared-cli-session).
+
+New run previews an existing contract before launch. An active task's Cancel run action exposes the exact worker identity before cancellation. Run and cancel use the existing CLI. Contracts that require approval or instruction review follow the CLI workflow.
 
 ## Reviewer result (task_kind: review)
 crew adds the reviewer rule to the worker prompt. The worker puts this block before the final RESULT block:

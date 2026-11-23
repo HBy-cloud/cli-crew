@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Crew Runs · CLI session</title>
+  <link rel="stylesheet" href="/view.css">
+  <link rel="stylesheet" href="/vendor/xterm.css">
+  <script src="/vendor/xterm.js" defer></script>
+  <script src="/terminal.js" defer></script>
+</head>
+<body class="terminal-page">
+  <header class="masthead">
+    <div>
+      <h1>Crew <span>Runs</span></h1>
+      <p class="project">Codex · CLI session</p>
+    </div>
+    <div class="toolbar">
+      <span id="connection" role="status">Connecting</span>
+      <a class="toolbar-link" href="/">Back to runs</a>
+    </div>
+  </header>
+  <p id="terminal-feedback" class="feedback" role="status"></p>
+  <section class="terminal-shell" aria-label="Shared Codex terminal">
+    <div id="terminal-screen"></div>
+  </section>
+</body>
+</html>

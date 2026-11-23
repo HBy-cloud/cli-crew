@@ -7,7 +7,7 @@
     claude : junction  ~/.claude/skills/cli-crew  -> <repo>/skill/cli-crew
     codex  : junction  ~/.codex/skills/cli-crew   -> <repo>/skill/cli-crew
     agy    : entry in  ~/.gemini/config/skills.json pointing at <repo>/skill
-             (agy does not follow junctions in ~/.gemini/config/skills; see docs/research/2026-11-21-e03b-*)
+             (agy does not follow junctions in ~/.gemini/config/skills; verified 2026-11-21)
   Existing files that this script did not create are never overwritten. An existing agy skills.json is
   backed up before an entry is added or removed (skills.json.bak, then numbered suffixes).
   Windows only. Start a new CLI session afterwards; running sessions do not pick up new skills.
