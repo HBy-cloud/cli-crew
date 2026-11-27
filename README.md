@@ -8,32 +8,56 @@
 
 **English** · [한국어](README.ko.md)
 
-**Delegate scoped tasks between AI coding CLIs, verify the results, and keep the evidence in your project.**
+**Get a second opinion from a different AI model, inside the CLI you already use, with a record of what was checked.**
 
-cli-crew lets the AI CLI you are already using (the *main* agent) hand bounded work to Codex, Claude Code, Antigravity, and Cursor CLI. GitHub Copilot CLI is also available as an opt-in worker for small single-file edits. A skill tells the main agent when delegation is worth it and how to verify the result. The Python CLI, `crew`, launches workers in safe modes, enforces timeouts and approvals, checks file boundaries, and records every run. The main agent always makes the final call.
+cli-crew is a skill and a small Python CLI (`crew`). The AI CLI you are working in (the *main* agent) stays in charge. When a step is worth handing off, it writes a short contract and gives it to another CLI: Codex, Claude Code, Antigravity, or Cursor CLI. GitHub Copilot CLI is also available as an opt-in worker for small single-file edits. `crew` launches that worker in a restricted mode, checks what it changed, and records the run. The main agent verifies the result against the source and makes the final call.
 
 ![The main agent defines a contract, a worker runs it, and the main agent verifies the result.](docs/assets/workflow.svg)
 
-[Features](#features) · [Installation](#installation) · [Quick start](#quick-start) · [Commands](#commands) · [Inspecting a run](#inspecting-a-run) · [Workers](#supported-workers) · [Safety](#safety-model-and-limitations) · [Compared](#how-cli-crew-differs-from-other-orchestrators) · [Update](#updating) · [Uninstall](#uninstalling) · [CLI reference](crew/README.md)
+[Why](#why-cli-crew) · [The skill](#what-the-skill-does) · [What you get](#what-you-get) · [Evidence](#evidence-so-far) · [Install](#installation) · [Quick start](#quick-start) · [Workers](#supported-workers) · [Compared](#how-cli-crew-differs-from-other-orchestrators) · [Limits](#limitations) · [Roadmap](#roadmap) · [CLI reference](crew/README.md)
 
-## Features
+## Why cli-crew
 
-- **Goal-driven delegation.** You state the outcome. The main agent decides what to do itself, what to give its own subagents, what to hand to a worker, and when an independent review from a different model is worth the extra call.
-- **Plans for multi-step goals.** Before starting, the main agent writes a plan (a *cplan*) in which each step names its executor (itself, its own built-in subagents, or a crew worker), its dependencies, and how it will be verified. When evidence changes the plan, the change and its reason are recorded. Runs are linked to steps, so progress survives a handoff.
-- **Independent review.** Plans call for a reviewer on a different model for each deliverable. If the review is skipped, the main agent records the reason in the plan. `crew` records the reviewer's verdict and the response retains the evidence. `crew plan check` warns when a reviewer may run on the same model as the author and, once both steps have runs, when they reported the same model; a run summary shows `MODEL WARNING` when a worker reports a different model than the contract requested.
-- **Explicit task contracts.** Each delegated task is a Markdown contract with an objective, file paths for context, completion criteria, and, for edits, the exact paths the worker may change.
-- **Verification before acceptance.** `crew` classifies runs and checks for detectable out-of-scope changes and subagent use. The main agent records acceptance or rejection and can attach its verification with `--verified`.
-- **Guardrails by default.** Read-only mode is the default, writes run one at a time, and credential-like environment variables are stripped from worker processes. Higher-cost runs and delegation when Crew detects sensitive-data hints in project instructions require approval.
-- **Local, inspectable records.** Contracts, prompts, logs, results, and verdicts live under `.agent-runs/` in your project. `crew handoff` drafts a handoff note so another CLI can pick up the work.
+An AI agent that reviews its own work shares its own blind spots. Models from different providers are trained differently, so a second model can catch what the first one missed. Doing this by hand means copying context between tools, and afterwards nothing shows what the second model was asked, what it changed, or why its answer was trusted.
+
+cli-crew turns that into a routine step:
+
+- **A different model checks the work.** The plan calls for a reviewer on a different model for each deliverable, and `crew` warns when the reviewer may be the same model. If a review is skipped, the plan records why (cost, no other model available, or your choice).
+- **Workers get a bounded task, not your whole session.** A contract names the question, the file paths, the completion criteria and, for edits, the exact paths that may change.
+- **Nothing is trusted on the worker's word.** Exit code 0 is not success. `crew` enforces a timeout, classifies the run from CLI diagnostics and the worker's result block, compares file snapshots, and the main agent checks the claims and runs the tests itself.
+- **The evidence stays in your project.** Contracts, prompts, logs, results and verdicts are kept under `.agent-runs/`, so a later session, or another CLI, can see what happened.
+
+## What the skill does
+
+The skill (`skill/cli-crew/SKILL.md`) is the set of instructions the main agent follows. `crew` does the mechanics, and the skill tells the main agent how to judge:
+
+1. **Read the project first.** It runs `crew detect`, reads the project's instruction files, and, if they restrict external agents and delegation is on the table, stops to ask.
+2. **Plan the whole goal.** For anything with two or more steps, any file change, or work that may continue in another session, it writes a *cplan*: each step names who does it (the main agent, its own subagents, or a crew worker), what it depends on, and how it will be verified. Plan changes are recorded with a reason.
+3. **Choose who does each step.** Tightly coupled edits, shell commands and tests stay with the main agent. Independent reads can go to helpers in parallel. A worker is used for a different model's review, a scoped edit with a boundary check, or a result that should be recorded.
+4. **Delegate with a contract.** It writes the contract, picks the CLI, model and effort, and launches it with `crew run`, which enforces the timeout. Approvals for cost and for sharing sensitive data come from you.
+5. **Verify, then decide.** It reads the worker's result, follows up unverified citations, checks claims against the source, runs the tests, and records `crew accept ID --verified "<what it checked>"` or `crew reject ID --reason "<reason>"`.
+6. **Hand off.** When files changed, workers ran, or work may continue, `crew handoff` drafts a note with the runs and the active or linked plans so the next session can pick up.
+
+The main agent always decides whether to delegate at all. Small tasks are usually done directly.
+
+## What you get
+
+- **Plans for multi-step goals.** Runs are linked to plan steps, so progress survives a handoff.
+- **Independent review.** `crew` records the reviewer's verdict (`PASS`, `FAIL` or `PARTIAL`) and the number of criteria lines; the evidence per criterion stays in the saved response. A skipped review needs a recorded reason in the plan. `crew plan check` warns when a reviewer may run on the same model as the author and, once both steps have runs, when they reported the same model; a run summary shows `MODEL WARNING` when a worker reports a different model than the contract requested.
+- **Verification before acceptance.** `crew` checks for detectable out-of-scope changes and subagent use. Accepting a run that cannot be confirmed (`DONE_UNVERIFIED`, `PARTIAL`) requires `--verified` with the main agent's own check, and a run with a violation can only be accepted with an explicit override and a reason.
+- **Guardrails by default.** Read-only mode is the default, writes run one at a time, credential-like environment variables are stripped from worker processes, and bypass flags are never used. Higher-cost runs and delegation when project instructions hint at sensitive data require your approval.
+- **Routing from your own history.** `crew routing` and `crew compare` show which workers were accepted, rejected, how long they took and their reported worker cost (when the CLI reports it) on similar work.
 - **Crew Runs.** See worker progress, saved results, and review verdicts in a local List or Kanban view. On Windows, the optional CLI session shares a new Codex session between your terminal and Crew Runs.
 
-## How it works
+## Evidence so far
 
-1. The main agent reads the project instructions and runs `crew detect` to see which workers are available.
-2. For a separable task, it writes a contract (`crew contract new`) and launches it (`crew run`).
-3. `crew` runs the worker in a safe mode and enforces the timeout. It classifies the outcome from the CLI's exit status and diagnostics and from the worker's result block.
-4. `crew` compares a before/after snapshot of the project against the contract's permitted paths.
-5. The main agent checks the claims against the source, runs the tests, and records `crew accept ID --verified "<what it checked>"` or `crew reject ID --reason "<reason>"`.
+cli-crew is young, and its main claim, that a review by a different model improves results, is not yet measured.
+
+- **Benchmark round 1 (2026-11-21).** Six small synthetic tasks (bug fixes, a planted-defect review, an investigation, a feature), with Claude Opus 5.5 as main, once with the skill disabled and once with it available. Both scored full marks on every task, so the tasks were too easy to show any benefit. With these goal-only prompts the skill never loaded, so delegation itself was not measured. Four harder pilot tasks were also solved in full by a single main (Opus 5.5, and Sonnet 5.5 at low effort).
+- **Skill loading and delegation.** In our tests a plain goal such as "fix this bug and add a test" did not load the skill, while requests that asked for another model's review did. Even when invoked by name, the main agent may decide a task is small enough to do itself: in a planted-defect review it loaded the skill and reviewed the 77-line file without delegating.
+- **Anecdotal.** In cli-crew's own development, reviews by other models found defects that were then fixed. For example, before v0.1.1 a Codex review found that the manual macOS and Linux link step would nest a second link if it was run twice. These are examples, not measurements.
+
+Measuring real use cases is the first item on the [roadmap](#roadmap).
 
 ## Installation
 
@@ -81,7 +105,7 @@ The main agent may fix a small bug directly. If an independent check helps, it c
 
 ### Using the skill
 
-**Invoke it by name when you want cli-crew.** The skill loads on its own only when a request matches its description, for example "get an independent review from another model". In our tests a plain goal such as "fix this bug and add a test" never loaded it (0 of 6), while requests that asked for another model's review did (4 of 4).
+**Invoke it by name when you want cli-crew.** The skill loads on its own only when a request matches its description, for example "get an independent review from another model". In our tests a plain goal such as "fix this bug and add a test" did not load it, while requests that asked for another model's review did.
 
 | Main CLI | How to invoke | Status |
 | --- | --- | --- |
@@ -185,18 +209,6 @@ Example: a worker can report success even when the final file-boundary check fai
 
 Adapters were verified with codex-cli 0.172.0, agy 1.5.18, Claude Code 2.1.332, GitHub Copilot CLI 1.0.112, and Cursor CLI 2026.11.22-e9042b2. Re-check after upgrading a CLI. See [worker adapters and Copilot setup](skill/cli-crew/references/adapters.md#github-copilot-cli-setup).
 
-## Safety model and limitations
-
-- **Concurrency.** Up to five independent read tasks can run at once by default (`max_concurrent`). The skill hands independent reads to parallel helpers by default, because main's own tokens are a cost; `crew plan check` warns when independent steps all stay on main. Start parallel runs with the main CLI's own background mode, or with `crew run --detach` and then `crew wait` when it has none. A write task always runs alone. Reservations take an OS file lock on `.agent-runs/locks/reserve.lock`, which is released if the holder dies; do not run an older `crew` version on the same project at the same time.
-- **Shell commands, builds, and tests.** The workflow assigns these to the main agent. Codex uses its filesystem sandbox and a worker instruction to use file tools. Shell restrictions depend on the CLI and environment. [Worker adapter restrictions](skill/cli-crew/references/adapters.md#known-behaviour)
-- **Boundary checks.** `crew` reports detectable changes inside the project. Writes outside the project escape this check. agy write tasks use per-session settings that block writes outside the project and changes to the existing files and folders beside the write paths. agy can still create new files elsewhere in the project, such as its root or inside a write folder, and the Git boundary check skips ignored files except those with secret-like names. In testing Cursor's edit tool rejected an edit outside the project (shell commands that a user or project `cli.json` allows are not covered by that), and its file-permission rules did not stop edits to other project files in testing (and its sandbox is unavailable on Windows), so out-of-scope Cursor edits are only reported after the run.
-- **Web access.** Workers may search and read the public web, but their instructions forbid sending project content, secrets or personal data. `crew` does not block the network. In read-mode tests (2026-11-26) only Codex opened pages; Claude Code and Antigravity workers could search but not fetch pages, and Cursor was not tested.
-- **Data leaves your machine.** Workers use their own provider accounts, so delegated content goes to OpenAI, Anthropic, Google, GitHub Copilot, or Cursor (and the model provider it routes to). If project instructions mention sensitive data, `crew run` requires explicit approval. If they restrict external agents, the main agent asks before delegating.
-- **Cost approval.** High reasoning effort, or models matching an entry you list in `~/.crew/config.toml` (case-insensitive prefix, so `claude-opus-5-5` also covers `claude-opus-5-5-high`), require approval before launch. While that list is set, a run whose model cannot be resolved (for example Copilot or Cursor Auto) also needs approval.
-- **No automatic rollback.** `crew` reports violations but does not revert changes.
-
-The full rules are in the [verification and approval protocol](skill/cli-crew/references/protocol.md).
-
 ## How cli-crew differs from other orchestrators
 
 Built-in subagents and native swarms (such as Claude Code subagents or Antigravity `/swarm`) and autonomy-first orchestrators (such as [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode)) optimize for **speed and throughput**. cli-crew is a **cross-model audit and handoff harness** that optimizes for **control, independent verification, and verifiable records**:
@@ -210,12 +222,29 @@ Built-in subagents and native swarms (such as Claude Code subagents or Antigravi
 | Communication | Interactive multi-turn or shared message board | Automated multi-stage loop | One-shot contract execution (`codex exec`, `claude -p`, `agy --print`, `copilot -p`) |
 | Audit & boundaries | Session transcript only | Shared filesystem (listed as a known limitation in their SECURITY.md) | Per-task `write_paths`, before/after file snapshots, `## REVIEW` verdicts, and recorded acceptance reasons under `.agent-runs/` |
 
-**Honest trade-offs (when to use what):**
-- **Routine coding and implementation speed.** Serial writes, contracts, and independent verification add time and token cost for small tasks a main agent can finish on its own.
-- **Cross-provider code review and defect detection:** This is where cli-crew pays off. A worker from a different provider (`codex`, `claude`, `agy`) checks deliverables against explicit criteria (`## REVIEW`) without trusting the author's claims, catching blind spots that single-model self-review misses.
-- **Strict governance and cross-CLI handoffs:** Choose cli-crew when you cannot allow `--yolo` / bypass flags, need credential-like environment variables stripped, want detective file-boundary checks, or need to hand off an active plan (`cplan` + `handoffs/`) when switching between Claude Code, Codex, and Antigravity.
+**When to use what:**
+- **Routine coding and implementation speed:** use the main agent alone or its built-in subagents. Serial writes, contracts, and independent verification add time and token cost for small tasks a main agent can finish on its own.
+- **Cross-provider review and defect detection:** this is what cli-crew is built for. A worker from a different provider checks deliverables against explicit criteria (`## REVIEW`) without trusting the author's claims. The aim is to catch blind spots that single-model self-review misses; how often it does is not yet measured (see [Evidence so far](#evidence-so-far)).
+- **Strict governance and cross-CLI handoffs:** choose cli-crew when you cannot allow `--yolo` / bypass flags, need credential-like environment variables stripped, want detective file-boundary checks, or need to hand off an active plan (`cplan` + `handoffs/`) when switching between Claude Code, Codex, and Antigravity.
 
 The oh-my-claudecode comparison reflects its README and SECURITY.md as read on 2026-11-21.
+
+## Limitations
+
+- **Benefit not yet measured.** See [Evidence so far](#evidence-so-far). Contracts, serial writes and independent verification add time and token cost, which small tasks a main agent can finish alone do not repay.
+- **Windows first.** Only Windows 11 is verified. The skill installer and the shared CLI session are Windows only, and on macOS `crew cancel` cannot confirm a worker's identity.
+- **Automatic loading is not reliable.** Whether the skill loads depends on the CLI and the prompt; in our tests plain goals did not load it. Invoke it by name (see [Using the skill](#using-the-skill)).
+- **One-shot workers.** A worker gets one contract and returns one result. There is no multi-turn conversation with a worker, and writes never run in parallel.
+- **Worker CLIs change.** Adapters are verified against specific CLI versions. A different version prints a `VERSION WARNING`, and its results may be misclassified until the adapter is re-checked.
+- **Concurrency.** Up to five independent read tasks can run at once by default (`max_concurrent`). The skill hands independent reads to parallel helpers by default, because main's own tokens are a cost; `crew plan check` warns when independent steps all stay on main. Start parallel runs with the main CLI's own background mode, or with `crew run --detach` and then `crew wait` when it has none. A write task always runs alone. Reservations take an OS file lock on `.agent-runs/locks/reserve.lock`, which is released if the holder dies; do not run an older `crew` version on the same project at the same time.
+- **Shell commands, builds, and tests.** The workflow assigns these to the main agent. Codex uses its filesystem sandbox and a worker instruction to use file tools. Shell restrictions depend on the CLI and environment. [Worker adapter restrictions](skill/cli-crew/references/adapters.md#known-behaviour)
+- **Boundary checks.** `crew` reports detectable changes inside the project. Writes outside the project escape this check. agy write tasks use per-session settings that block writes outside the project and changes to the existing files and folders beside the write paths. agy can still create new files elsewhere in the project, such as its root or inside a write folder, and the Git boundary check skips ignored files except those with secret-like names. In testing Cursor's edit tool rejected an edit outside the project (shell commands that a user or project `cli.json` allows are not covered by that), and its file-permission rules did not stop edits to other project files in testing (and its sandbox is unavailable on Windows), so out-of-scope Cursor edits are only reported after the run.
+- **Web access.** Workers may search and read the public web, but their instructions forbid sending project content, secrets or personal data. `crew` does not block the network. In read-mode tests (2026-11-26) only Codex opened pages; Claude Code and Antigravity workers could search but not fetch pages, and Cursor was not tested.
+- **Data leaves your machine.** Workers use their own provider accounts, so delegated content goes to OpenAI, Anthropic, Google, GitHub Copilot, or Cursor (and the model provider it routes to). If project instructions mention sensitive data, `crew run` requires explicit approval. If they restrict external agents, the main agent asks before delegating.
+- **Cost approval.** High reasoning effort, or models matching an entry you list in `~/.crew/config.toml` (case-insensitive prefix, so `claude-opus-5-5` also covers `claude-opus-5-5-high`), require approval before launch. While that list is set, a run whose model cannot be resolved (for example the default model of Claude Code or agy, or Copilot or Cursor Auto) also needs approval; name a model in the contract to avoid that.
+- **No automatic rollback.** `crew` reports violations but does not revert changes.
+
+The full rules are in the [verification and approval protocol](skill/cli-crew/references/protocol.md).
 
 ## Handing off to another CLI
 
@@ -260,9 +289,15 @@ pwsh -File scripts/install-skill.ps1 -Uninstall -Agents codex
 
 The script removes only junctions and entries that point to this clone. Other agy settings and backups are preserved. Your project files (`AGENTS.md`, `.agent-runs/`, handoffs) and the clone itself are left in place. After a full uninstall, `uv tool list` should no longer show `cli-crew`. If `crew` still runs, `Get-Command crew -All` shows which executable PowerShell finds.
 
-## Project status
+## Roadmap
 
-cli-crew is an early release (0.1.1). Windows installation, reinstallation, and removal are tested in disposable home directories. macOS and Linux have not been verified.
+cli-crew is an early release (0.1.1). Windows installation, reinstallation, and removal are tested in disposable home directories. macOS and Linux have not been verified. The next work, in order:
+
+1. **Prove the core claim with real use cases.** Run realistic tasks that a single model gets wrong, with and without a review by a different model, and publish what was caught, what was missed, and the extra cost and time.
+2. **A first-run demo.** A sample project and a short walk-through from installation to a first accepted review, so a new user can see the whole loop in a few minutes.
+3. **Real-CLI integration tests and wider compatibility.** Repeatable smoke tests against the installed worker CLIs to catch provider updates early, and verification on macOS and Linux.
+
+Later: handoff-based file ownership, switching the main agent, parallel writes in isolated git worktrees, and structured output and cost limits where the CLIs support them.
 
 ## Development
 
