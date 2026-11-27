@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from crew.common import (
-    AGENTS, EFFORTS, HIGH_EFFORTS, TASK_ID_RE, CrewError, home_dir, is_drive_root, is_secret_name, is_within,
-    real, resolve_nearest,
+    AGENTS, EFFORTS, HIGH_EFFORTS, MODEL_EFFORT_SUFFIX, TASK_ID_RE, CrewError, approval_match, home_dir,
+    is_drive_root, is_secret_name, is_within, real, resolve_nearest,
 )
 from crew.state import Runs, retry_of_problem
 
@@ -303,8 +303,12 @@ def validate(c: Contract, s: dict[str, Any], root: Path, runs: Runs, cfg: dict[s
     if effort in HIGH_EFFORTS:
         warnings.append(f"effort '{effort}' requires --approve-cost at run time")
     model = s.get("model")
-    if model and model in (cfg.get("approval_models") or []):
-        warnings.append(f"model '{model}' is in approval_models; requires --approve-cost")
+    if approval_match(model if isinstance(model, str) else None, cfg.get("approval_models") or []):
+        warnings.append(f"model '{model}' matches approval_models; requires --approve-cost")
+    suffix = re.search(MODEL_EFFORT_SUFFIX, model) if agent == "agy" and isinstance(model, str) else None
+    if suffix and suffix.group(1) != effort:
+        errors.append(f"agy model '{model}' carries effort '{suffix.group(1)}'; set effort: {suffix.group(1)} "
+                      "(Claude models also have unsuffixed IDs such as claude-sonnet-5-5)")
 
     # write_paths
     if mode == "write" and not s.get("write_paths"):
@@ -352,6 +356,8 @@ def validate(c: Contract, s: dict[str, Any], root: Path, runs: Runs, cfg: dict[s
     if s.get("allow_subagents") and mode == "write":
         errors.append("allow_subagents=true is only allowed with mode=read")
     if s.get("worker_handoff") is True:
+        if agent == "cursor":
+            errors.append("worker_handoff=true is not available for cursor (its write mode has no file boundary)")
         if mode != "read":
             errors.append("worker_handoff=true is only for mode=read (a write task may list its handoff file in write_paths)")
         if s.get("add_dirs"):
@@ -393,6 +399,14 @@ def validate(c: Contract, s: dict[str, Any], root: Path, runs: Runs, cfg: dict[s
                     elif agent and want != agent:
                         warnings.append(f"plan step {plan_step} names {want} but the contract uses {agent}; "
                                         "update one of them")
+                    else:  # compare only models set on both sides; default/null is never compared
+                        planned, actual = pl.executor_model(step.executor), s.get("model")
+                        if planned and isinstance(actual, str) and actual and planned.lower() != actual.lower():
+                            warnings.append(f"plan step {plan_step} names model {planned} but the contract uses "
+                                            f"{actual}; update the plan (with a Revisions row) or the contract")
+                    if step.reviews and s.get("task_kind") != "review":
+                        warnings.append(f"plan step {plan_step} is a reviewer step (reviews {', '.join(step.reviews)}); "
+                                        "set task_kind: review so the worker gets the reviewer rule")
                 if p.fields.get("status") != "active":
                     warnings.append(f"plan '{plan_id}' status is {p.fields.get('status')}")
 
@@ -401,6 +415,10 @@ def validate(c: Contract, s: dict[str, Any], root: Path, runs: Runs, cfg: dict[s
         text = c.sections.get(name, "")
         if not text or text.startswith("TODO"):
             errors.append(f"section '## {name}' is missing or still a TODO placeholder")
+    context = c.sections.get("Context", "")
+    if not context or context.startswith("TODO"):
+        warnings.append("section '## Context' is missing or still a TODO placeholder; list the file paths, decisions "
+                        "and constraints the worker needs")
 
     # secrets
     raw = c.path.read_text(encoding="utf-8")

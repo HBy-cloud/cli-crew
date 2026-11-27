@@ -9,21 +9,23 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from crew import __version__, adapters, citations, classify, contract as ct, plan as pl, routing, runner, snapshot, state as st
 from crew.common import (
-    AGENTS, EXIT_DUP, EXIT_GUARD, EXIT_OK, EXIT_USAGE, KST, TASK_ID_RE, CrewError, atomic_write_text,
+    AGENTS, EXIT_CANCEL, EXIT_DUP, EXIT_GUARD, EXIT_NOT_DONE, EXIT_OK, EXIT_USAGE, KST, TASK_ID_RE, CrewError,
+    atomic_write_text,
     load_config, now, now_iso, parse_iso, read_json, read_text,
 )
-from crew.safety import INSTRUCTION_FILES, instruction_dirs, scan_instructions
+from crew.safety import INSTRUCTION_FILES, SANDBOX_MESSAGE, instruction_dirs, sandbox_network_disabled, scan_instructions
 from crew.subagents import path_size, verify_codex_rollout_for_delete
 from crew.trace import trace_timestamp
 
 API_KEY_VARS = ("OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "GEMINI_API_KEY",
-                "GOOGLE_API_KEY")
+                "GOOGLE_API_KEY", "CURSOR_API_KEY")
 
 
 def emit(data: Any, as_json: bool, lines: list[str]) -> None:
@@ -48,11 +50,11 @@ def handoff_dir(root: Path) -> Path | None:
     return None
 
 
-def latest_handoff(root: Path) -> Path | None:
+def latest_handoff(root: Path, exclude: set[Path] = frozenset()) -> Path | None:
     d = handoff_dir(root)
     if not d:
         return None
-    files = [p for p in d.rglob("*.md") if p.is_file()]
+    files = [p for p in d.rglob("*.md") if p.is_file() and p.resolve() not in exclude]
     return max(files, key=lambda p: p.stat().st_mtime) if files else None
 
 
@@ -129,7 +131,7 @@ def cmd_detect(a) -> int:
             "instruction_files": files, "possible_restrictions": hits, "sensitive_data_hints": privacy,
             "handoff_dir": str(hd) if hd else None, "handoff_lang": lang,
             "active": active, "api_key_env_present": keys,
-            "approval_models": cfg.get("approval_models")}
+            "approval_models": cfg.get("approval_models"), "sandbox_network_disabled": sandbox_network_disabled()}
     lines = [f"root: {root} (git={git}, uncommitted={dirty})"]
     for k, v in clis.items():
         lines.append(f"cli {k}: {'OK ' + str(v['version']) if v['available'] else 'not available'}"
@@ -137,6 +139,8 @@ def cmd_detect(a) -> int:
     for k, v in clis.items():
         if v["version_warning"]:
             lines.append(f"VERSION WARNING: {v['version_warning']}")
+    if sandbox_network_disabled():
+        lines.append(f"SANDBOX WARNING: {SANDBOX_MESSAGE}")
     lines.append(f"instruction files ({len(files)}): " + (", ".join(files) if files else "none"))
     if hits:
         lines.append("POSSIBLE DELEGATION RESTRICTIONS (read and judge yourself):")
@@ -326,6 +330,16 @@ def _has_active_cplan(runs: Any) -> bool:
     return False
 
 
+def model_mismatch(requested: Any, actual: Any) -> bool:
+    """True when an explicit requested model is not among the models the worker reported. Aliases match by
+    substring (`sonnet` ~ `claude-sonnet-5-5`); null, auto, default and an unreported model are never a mismatch."""
+    if not isinstance(requested, str) or requested.strip().lower() in ("", "auto", "default"):
+        return False
+    req = requested.strip().lower()
+    names = [m.strip().lower() for m in str(actual or "").split(",") if m.strip()]
+    return bool(names) and not any(req in n or n in req for n in names)
+
+
 def summarize(state: dict[str, Any], runs: Any = None) -> list[str]:
     lines = [f"task {state['task_id']}: {state.get('status')} (agent={state.get('agent')}, mode={state.get('mode')}, "
              f"attempts={len(state.get('attempts', []))}, {state.get('duration_s')}s)"]
@@ -348,6 +362,9 @@ def summarize(state: dict[str, Any], runs: Any = None) -> list[str]:
     lines.append(f"subagent used: {state.get('subagent_used')} (violation={state.get('subagent_violation')})")
     if state.get("model_actual"):
         lines.append(f"model: {state['model_actual']}")
+    if model_mismatch(state.get("model_requested"), state.get("model_actual")):
+        lines.append(f"MODEL WARNING: the contract requested {state['model_requested']} but the worker reported "
+                     f"{state['model_actual']}; check before counting it as a review on a different model")
     if state.get("cost_usd") is not None:
         lines.append(f"cost_usd: {state['cost_usd']}")
     last = (state.get("attempts") or [{}])[-1]
@@ -373,17 +390,187 @@ def cmd_run(a) -> int:
         scope = instruction_dirs(root, root, r.settings.get("write_paths") or [], r.add_dirs_abs)
         if scan_instructions(scope)["restrictions"]:
             raise CrewError(EXIT_GUARD, "delegation instructions require review in the CLI")
+    if getattr(a, "detach", False):
+        return _run_detached(a, root, runs, str(r.settings["task_id"]))
     state = runner.run(root, runs, r, c.body, cfg, approve_cost=a.approve_cost,
                        approve_data_sharing=a.approve_data_sharing, allow_unbounded_write=a.allow_unbounded_write)
+    state, lines = _run_output(root, runs, state, a.with_result, a.json)
+    emit(state, a.json, lines)
+    return runner.exit_code_for(state)
+
+
+def _run_output(root: Path, runs: st.Runs, state: dict[str, Any], with_result: bool,
+                as_json: bool) -> tuple[dict[str, Any], list[str]]:
+    """Summary lines of a finished run; with_result adds the RESULT and, for read tasks, the citation check."""
     lines = summarize(state, runs)
-    if a.with_result:
+    if with_result:
         result = _result_text(runs, state, False)
-        if a.json:
+        if as_json:
             state = {**state, "result_text": result}
         else:
             lines.append(result)
-    emit(state, a.json, lines)
-    return runner.exit_code_for(state)
+        if state.get("mode") == "read":
+            # Same check as `crew check`, so a read result is never read without it (existence only).
+            missing = citations.unverified(root, _result_text(runs, state, True))
+            state = {**state, "unverified_citations": missing}
+            lines.extend(f"unverified citation: {ref}" for ref in missing)
+            if not missing:
+                lines.append("citations: none unverified (file and line existence only; check the source)")
+    return state, lines
+
+
+DETACH_START_S = 120  # bounded wait for the detached child to start its worker
+WAIT_POLL_S = 2.0
+_CHILD_ENTRY = "import sys; sys.path.insert(0, sys.argv[1]); from crew.cli import main; sys.exit(main(sys.argv[2:]))"
+
+
+def _poll_s(default: float) -> float:
+    hook = os.environ.get("CREW_TEST_POLL_S")  # test hook: can only shorten
+    return min(default, float(hook)) if hook else default
+
+
+def _read_state_quietly(runs: st.Runs, tid: str) -> dict[str, Any] | None:
+    """A state read that a concurrent replace (Windows sharing errors) or a half-written file cannot break."""
+    try:
+        return runs.load_state(tid)
+    except (CrewError, OSError):
+        return None
+
+
+def _spawn_detached(cmd: list[str], cwd: str, log_path: Path, env: dict[str, str]) -> subprocess.Popen:
+    kw: dict[str, Any] = {} if os.name == "nt" else {"start_new_session": True}
+    if os.name == "nt":
+        base = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW  # hidden console for the workers
+        tries = [base | subprocess.CREATE_BREAKAWAY_FROM_JOB, base]
+    else:
+        tries = [0]
+    with open(log_path, "wb") as log:
+        for i, flags in enumerate(tries):
+            try:
+                return subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=log,
+                                        stderr=subprocess.STDOUT, close_fds=True, creationflags=flags, **kw)
+            except OSError:  # a job without breakaway rights refuses CREATE_BREAKAWAY_FROM_JOB
+                if i == len(tries) - 1:
+                    raise
+    raise AssertionError("unreachable")
+
+
+def _run_detached(a, root: Path, runs: st.Runs, tid: str) -> int:
+    import uuid
+    token = uuid.uuid4().hex
+    runs.ensure()
+    log_path = runs.contained(runs.file(f"{tid}.detach-{token[:8]}.log"))
+    args = ["run", "--contract", str(Path(a.file).resolve())]
+    for flag, value in (("--agent", a.agent), ("--effort", a.effort), ("--model", a.model), ("--timeout", a.timeout)):
+        if value is not None:
+            args += [flag, str(value)]
+    args += [flag for flag, on in (("--approve-cost", a.approve_cost),
+                                   ("--approve-data-sharing", a.approve_data_sharing)) if on]
+    package_root = str(Path(__file__).resolve().parents[1])
+    cmd = [sys.executable, "-I", "-X", "utf8", "-c", _CHILD_ENTRY, package_root, *args]
+    # Same working directory as the caller, so the project root and relative paths (CREW_CONFIG) resolve the same.
+    proc = _spawn_detached(cmd, os.getcwd(), log_path, {**os.environ, "CREW_DETACH_TOKEN": token})
+    deadline = time.monotonic() + DETACH_START_S
+    while True:
+        rc = proc.poll()
+        s = _read_state_quietly(runs, tid)
+        mine = s if s and s.get("detach_token") == token else None
+        if mine and mine.get("ended"):  # finished before we saw it start: report it like a foreground run
+            try:
+                rc = proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                rc = None
+            if rc is not None and rc != runner.exit_code_for(mine):
+                print(read_text(log_path).rstrip())  # refused after the reservation: keep the child's code and error
+                return rc
+            state, lines = _run_output(root, runs, mine, a.with_result, a.json)
+            emit(state, a.json, lines)
+            return runner.exit_code_for(state)
+        if mine and mine.get("worker_pid") and rc is None:
+            lines = [f"task {tid}: RUNNING (detached; every guard passed and the worker started)",
+                     f"wait with: crew wait {tid}", f"controller log: {log_path}"]
+            emit({"task_id": tid, "status": "RUNNING", "detached": True, "log": str(log_path)}, a.json, lines)
+            return EXIT_OK
+        if rc is not None:
+            again = _read_state_quietly(runs, tid)
+            if again and again.get("detach_token") == token and again.get("ended"):
+                continue  # the child wrote its final state between the two reads
+            print(read_text(log_path).rstrip())
+            if (again or {}).get("detach_token") != token:  # refused before the reservation: no state lists the log
+                log_path.unlink(missing_ok=True)
+            return rc
+        if time.monotonic() > deadline:
+            print(f"task {tid}: start not confirmed after {DETACH_START_S}s; the controller keeps running "
+                  f"(log: {log_path}); check with: crew status")
+            return EXIT_NOT_DONE
+        time.sleep(_poll_s(0.2))
+
+
+def cmd_wait(a) -> int:
+    from crew import procutil
+    root, runs = _root_and_runs()
+    if not 0 < a.timeout_min <= 60:
+        raise CrewError(EXIT_USAGE, "--timeout-min must be more than 0 and at most 60")
+    if a.task_ids:
+        ids = list(dict.fromkeys(a.task_ids))
+        for tid in ids:
+            _require_state(runs, tid)
+    else:
+        ids = [s["task_id"] for s in runs.iter_states() if s.get("status") == "RUNNING"]
+    if not ids:
+        emit({"finished": [], "running": [], "timed_out": False}, a.json, ["no running tasks"])
+        return EXIT_OK
+    finished: dict[str, dict[str, Any]] = {}
+    gone: dict[str, int] = {}
+    deadline = time.monotonic() + a.timeout_min * 60
+    try:
+        while True:
+            for tid in ids:
+                if tid in finished:
+                    continue
+                s = _read_state_quietly(runs, tid)
+                if s is None:
+                    gone.pop(tid, None)  # transient read failure: retry; death needs two readable polls in a row
+                    continue
+                if s.get("status") != "RUNNING":
+                    finished[tid] = s
+                elif not procutil.same_process(s.get("crew_pid"), s.get("crew_create_time")):
+                    gone[tid] = gone.get(tid, 0) + 1  # two reads in a row, so a run finishing just now is not STALE
+                    if gone[tid] >= 2:
+                        finished[tid] = s
+                else:
+                    gone.pop(tid, None)
+            running = [t for t in ids if t not in finished]
+            left = deadline - time.monotonic()
+            if not running or (a.any and finished) or left <= 0:
+                break
+            time.sleep(min(_poll_s(WAIT_POLL_S), left))
+    except KeyboardInterrupt:
+        print("crew wait: interrupted; the runs keep going (crew status)", file=sys.stderr)
+        return EXIT_CANCEL
+    lines: list[str] = []
+    out: list[dict[str, Any]] = []
+    for tid in ids:
+        s = finished.get(tid)
+        if s is None:
+            continue
+        alive = procutil.same_process(s.get("worker_pid"), s.get("worker_create_time"))
+        if s.get("status") == "RUNNING":
+            lines.append(f"task {tid}: {_display_status(s)} (the crew process is gone; worker alive: "
+                         f"{'yes' if alive else 'no'}; see crew status, crew cancel {tid})")
+            out.append({**s, "display_status": _display_status(s), "worker_alive": alive})
+            continue
+        state, task_lines = _run_output(root, runs, s, a.with_result, a.json)
+        if s.get("status") == "ORPHANED":
+            task_lines.append(f"worker alive: {'yes' if alive else 'no'}; see crew cancel {tid}")
+        lines += task_lines
+        out.append(state)
+    running = [t for t in ids if t not in finished]
+    timed_out = bool(running) and not (a.any and finished)
+    if running:
+        lines.append(f"still running: {', '.join(running)}" + (" (wait timed out)" if timed_out else ""))
+    emit({"finished": out, "running": running, "timed_out": timed_out}, a.json, lines)
+    return EXIT_NOT_DONE if timed_out else EXIT_OK
 
 
 def cmd_cancel(a) -> int:
@@ -566,6 +753,8 @@ def cmd_check(a) -> int:
         missing = citations.unverified(root, _result_text(runs, s, True))
         s = {**s, "unverified_citations": missing}
         lines.extend(f"unverified citation: {ref}" for ref in missing)
+        if not missing:
+            lines.append("citations: none unverified (file and line existence only; check the source)")
     emit(s, a.json, lines)
     return EXIT_OK
 
@@ -690,11 +879,32 @@ HANDOFF_KO = """# Handoff
 """
 
 
+HANDOFF_TODO = re.compile(r"^\s*-\s*TODO\b")  # the template's placeholder bullets only
+
+
+def _handoff_check(root: Path, target: str) -> int:
+    path = latest_handoff(root) if target == "latest" else Path(target)
+    if not path or not path.is_file():
+        raise CrewError(EXIT_USAGE, f"no handoff file to check: {target}")
+    todo = [(i, ln.strip()) for i, ln in enumerate(read_text(path).splitlines(), 1) if HANDOFF_TODO.match(ln)]
+    print(f"handoff: {path}")
+    for i, ln in todo:
+        print(f"TODO left: line {i}: {ln}")
+    print("OK" if not todo else f"{len(todo)} TODO placeholder(s); fill them with verified facts")
+    return EXIT_OK if not todo else EXIT_USAGE
+
+
 def cmd_handoff(a) -> int:
     root, runs = _root_and_runs()
+    if a.check:
+        return _handoff_check(root, a.check)
+    if not (a.agent and a.task and a.status):
+        raise CrewError(EXIT_USAGE, "crew handoff needs --agent, --task and --status (or --check [PATH])")
     base = handoff_dir(root) or (root / "handoffs")
     t = now()
-    lh = latest_handoff(root)
+    # Worker handoffs are written during their runs; using one as the cutoff would drop those runs.
+    slots = {(root / s["handoff_slot"]).resolve() for s in runs.iter_states() if s.get("handoff_slot")}
+    lh = latest_handoff(root, slots)
     if a.tasks:
         ids = [x.strip() for x in a.tasks.split(",") if x.strip()]
         states = [s for s in (runs.load_state(i) for i in ids) if s]
@@ -884,7 +1094,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_json(sp)
     sp.set_defaults(func=cmd_plan_show)
 
-    sp = sub.add_parser("run", help="run a worker for a contract (waits until done)")
+    sp = sub.add_parser("run", help="run a worker for a contract (waits until done; --detach returns once it started)")
     sp.add_argument("--contract", dest="file", required=True)
     sp.add_argument("--agent", choices=AGENTS)
     sp.add_argument("--effort")
@@ -896,6 +1106,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--allow-unbounded-write", action="store_true",
                     help="deprecated and ignored")
     sp.add_argument("--with-result", action="store_true", help="include the saved worker result in the run output")
+    sp.add_argument("--detach", action="store_true",
+                    help="start the run in the background and return once its worker started (then crew wait)")
     add_json(sp)
     sp.set_defaults(func=cmd_run)
 
@@ -909,6 +1121,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("task_ids", nargs="+")
     add_json(sp)
     sp.set_defaults(func=cmd_compare)
+
+    sp = sub.add_parser("wait", help="wait for running tasks without stopping them")
+    sp.add_argument("task_ids", nargs="*", metavar="TASK_ID")
+    sp.add_argument("--any", action="store_true", help="return when the first task finishes (default: all)")
+    sp.add_argument("--timeout-min", type=float, default=8.0, help="minutes, default 8, at most 60")
+    sp.add_argument("--with-result", action="store_true")
+    add_json(sp)
+    sp.set_defaults(func=cmd_wait)
 
     sp = sub.add_parser("status")
     sp.add_argument("--all", action="store_true")
@@ -949,9 +1169,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_reject)
 
     sp = sub.add_parser("handoff")
-    sp.add_argument("--agent", required=True)
-    sp.add_argument("--task", required=True)
-    sp.add_argument("--status", required=True, choices=("Done", "In progress", "Blocked"))
+    sp.add_argument("--agent")
+    sp.add_argument("--task")
+    sp.add_argument("--status", choices=("Done", "In progress", "Blocked"))
+    sp.add_argument("--check", nargs="?", const="latest", metavar="PATH")
     sp.add_argument("--since")
     sp.add_argument("--tasks")
     sp.add_argument("--lang", choices=("en", "ko"))

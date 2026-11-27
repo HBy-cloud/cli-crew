@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import unittest
 import uuid
 from contextlib import redirect_stderr, redirect_stdout
@@ -16,7 +17,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "src"))
 
-from crew import classify, cli, snapshot, state as st  # noqa: E402
+from crew import classify, cli, runner, snapshot, state as st  # noqa: E402
 from crew.adapters import Parsed, build, copilot_environment, parse  # noqa: E402
 from crew.common import CrewError  # noqa: E402
 from crew.subagents import verify_codex_rollout_for_delete  # noqa: E402
@@ -84,7 +85,7 @@ class Base(unittest.TestCase):
         self.old_cwd = os.getcwd()
         os.chdir(self.root)
         self.env_backup = dict(os.environ)
-        for a in ("codex", "agy", "claude", "copilot"):
+        for a in ("codex", "agy", "claude", "copilot", "cursor"):
             os.environ[f"CREW_BIN_{a.upper()}"] = json.dumps(FAKE + [a])
         os.environ["CREW_CONFIG"] = str(self.root / "no-config.toml")
         os.environ.pop("AGENT_ROLE", None)
@@ -241,6 +242,27 @@ class ContractTests(Base):
         self.assertEqual(self.check(self.contract(agent="claude", effort="max"))[0], 0)  # V-1
         self.assertEqual(self.check(self.contract(agent="agy", effort="max"))[0], 0)
 
+    def test_agy_model_effort_suffix_must_match(self):
+        def with_model(effort, model):
+            p = self.contract(tid=f"T-m{effort}{len(model)}", agent="agy", effort=effort)
+            p.write_text(p.read_text(encoding="utf-8").replace("model: null", f"model: {model}"), encoding="utf-8")
+            return self.check(p)
+        code, out = with_model("high", "claude-sonnet-5-5-low")
+        self.assertEqual(code, 2)
+        self.assertIn("carries effort 'low'", out)
+        self.assertEqual(with_model("low", "claude-sonnet-5-5-low")[0], 0)
+        self.assertEqual(with_model("medium", "claude-sonnet-5-5")[0], 0)
+
+    def test_cursor_effort_is_low_only(self):
+        self.assertEqual(self.check(self.contract(agent="cursor", effort="medium"))[0], 2)
+        self.assertEqual(self.check(self.contract(agent="cursor"))[0], 0)
+        p = self.contract(tid="T-curh", agent="cursor")
+        p.write_text(p.read_text(encoding="utf-8").replace("ephemeral: false", "ephemeral: false\nworker_handoff: true"),
+                     encoding="utf-8")
+        code, out = self.check(p)
+        self.assertEqual(code, 2)
+        self.assertIn("not available for cursor", out)
+
     def test_secret_detected(self):
         p = self.contract()
         p.write_text(p.read_text(encoding="utf-8") + "\nkey sk-" + "a" * 30 + "\n", encoding="utf-8")
@@ -297,6 +319,15 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(run(Parsed(final_text=self.OK, diag=["HTTP 503"]), rc=1), ("FAILED", "transient"))
         self.assertEqual(run(Parsed(final_text=self.OK, diag=["You exceeded your usage limit"])), ("FAILED", "usage_limit"))
 
+    def test_network_block_and_quota_log_lines(self):
+        run = lambda p, rc=1: classify.classify(p, exit_code=rc, timed_out=False, cancelled=False)[:2]
+        quota_log = "W1126 11:03:13 quota_manager.go:80] Failed to retrieve user quota summary: Post failed"
+        self.assertEqual(run(Parsed(final_text="", diag=[quota_log])), ("FAILED", "exit_1"))
+        self.assertEqual(run(Parsed(final_text="", diag=["Quota exceeded for this project"])), ("FAILED", "usage_limit"))
+        refused = "claude error result: API Error: Connection refused (ECONNREFUSED)"
+        self.assertEqual(run(Parsed(final_text="", diag=[refused])), ("FAILED", "network_blocked"))
+        self.assertEqual(run(Parsed(final_text="", diag=["ECONNRESET"])), ("FAILED", "transient"))
+
     def test_tool_output_still_carries_sandbox_signals(self):
         run = lambda p: classify.classify(p, exit_code=0, timed_out=False, cancelled=False)[0]
         self.assertEqual(run(Parsed(final_text=self.OK, tool_output=["CreateProcessAsUserW failed: 5"])), "DONE_UNVERIFIED")
@@ -319,6 +350,95 @@ class AdapterTests(Base):
                 self.assertNotIn("bypassPermissions", joined)
                 if mode == "write":
                     self.assertNotIn("--add-dir", joined)
+
+    def test_cursor_build_read_and_write(self):
+        for mode in ("read", "write"):
+            s = {"mode": mode, "effort": "low", "model": "composer-2.5", "timeout_min": 5,
+                 "write_paths": ["src"] if mode == "write" else []}
+            inv = build("cursor", s, root=self.root, add_dirs=[HERE] if mode == "read" else [], prompt_text="p",
+                        prompt_rel=".agent-runs/T.prompt.md", result_path=self.root / "r.md", cfg={})
+            self.assertEqual(inv.stdin_text, "p")
+            self.assertIn("--model", inv.args)
+            self.assertNotIn("--force", inv.args)
+            self.assertEqual("--mode" in inv.args, mode == "read")
+            self.assertEqual("--add-dir" in inv.args, mode == "read")
+
+    def test_cursor_parse_events(self):
+        events, stderr, result = self.root / "events", self.root / "stderr", self.root / "result"
+        init = {"type": "system", "subtype": "init", "session_id": "s1", "model": "Auto"}
+        say = {"type": "assistant", "message": {"content": [{"type": "text", "text": "## RESULT\nSTATUS: success\n"}]}}
+        done = {"type": "result", "subtype": "success", "is_error": False, "result": "x\n## RESULT\nSTATUS: success\n",
+                "usage": {"inputTokens": 10, "outputTokens": 2, "cacheReadTokens": 5, "cacheWriteTokens": 0}}
+        rejected = {"type": "tool_call", "subtype": "completed",
+                    "tool_call": {"editToolCall": {"args": {"path": "x"}, "result": {"rejected": {"reason": ""}}}}}
+        for tail, expected in (([say, done], "DONE"), ([rejected, say, done], "BLOCKED"), ([say], "FAILED"),
+                               ([{"type": "assistant", "message": "x"}, {"type": "tool_call", "tool_call": []},
+                                 {"type": "assistant", "message": {"content": "x"}}, done], "DONE")):
+            events.write_text("\n".join(json.dumps(e) for e in [init, *tail]), encoding="utf-8")
+            parsed = parse("cursor", events, stderr, result)
+            self.assertEqual((parsed.session_ref, parsed.model_actual), ("s1", "Auto"))
+            self.assertIs(parsed.subagent_used, False if done in tail else None)
+            if done in tail:
+                self.assertEqual(parsed.tokens, 17)
+            self.assertEqual(classify.classify(parsed, exit_code=0, timed_out=False, cancelled=False)[0], expected)
+
+    def test_cursor_result_fallback_keeps_review_and_ignores_older_footer(self):
+        events, stderr, result = self.root / "events", self.root / "stderr", self.root / "result"
+        def run(messages, full):
+            evs = [{"type": "assistant", "message": {"content": [{"type": "text", "text": m}]}} for m in messages]
+            evs.append({"type": "result", "subtype": "success", "result": full})
+            events.write_text("\n".join(json.dumps(e) for e in evs), encoding="utf-8")
+            return parse("cursor", events, stderr, result).final_text
+        full = "## REVIEW\nVERDICT: PASS\n## RESULT\nSTATUS: success\n"
+        self.assertEqual(run(["partial text"], full), full)
+        self.assertEqual(run(["## RESULT\nSTATUS: success\n", "later text"], "x"), "later text")
+        # REVIEW and RESULT in separate messages are kept together; the last REVIEW wins.
+        text = run(["## REVIEW\nVERDICT: PASS\n", "## REVIEW\nVERDICT: FAIL\n", "## RESULT\nSTATUS: success\n"], "x")
+        self.assertEqual(classify.parse_review_block(text)["verdict"], "FAIL")
+        self.assertEqual(classify.parse_result_block(text)["status"], "success")
+        # A footer split across messages is recovered from the terminal text.
+        split = "## RESULT\nSTATUS: success\n"
+        self.assertEqual(run(["## RESULT\n", "STATUS: success\n"], split), split)
+
+    def test_cursor_auto_is_unresolved_and_approval_config_is_validated(self):
+        from crew import runner
+        s = {"agent": "cursor", "effort": "low", "model": "Auto"}
+        self.assertIn("could not be determined", runner.cost_gate(s, {"approval_models": ["m"]}, False))
+        cfgp = self.root / "bad-config.toml"
+        cfgp.write_text('approval_models = "gpt"\n', encoding="utf-8")
+        os.environ["CREW_CONFIG"] = str(cfgp)
+        code, out, err = crew("contract", "check", str(self.contract()))
+        self.assertEqual(code, 2)
+        self.assertIn("approval_models must be a list", out + err)
+
+    def test_lone_surrogate_does_not_abort_record_writing(self):
+        from crew.common import atomic_write_text
+        p = self.root / "out.md"
+        atomic_write_text(p, "a\ud800b")
+        self.assertEqual(p.read_text(encoding="utf-8"), "a?b")
+
+    def test_agy_tokens_from_successful_result_only(self):
+        events, stderr, result = self.root / "events", self.root / "stderr", self.root / "result"
+        usage = {"input_tokens": 20208, "output_tokens": 127, "thinking_tokens": 0, "cache_read_tokens": 16902,
+                 "total_tokens": 20335}
+        for res, expected in (({"status": "SUCCESS", "usage": usage}, 20335),
+                              ({"status": "ERROR", "error": "x", "usage": usage}, None),
+                              ({"status": "SUCCESS"}, None),
+                              ({"status": "SUCCESS", "usage": {"total_tokens": -1}}, None)):
+            events.write_text(json.dumps({"event": "result", "result": res}), encoding="utf-8")
+            self.assertEqual(parse("agy", events, stderr, result).tokens, expected)
+
+    def test_approval_models_match_by_prefix(self):
+        from crew import runner
+        s = {"agent": "agy", "effort": "low", "model": "Claude-Opus-5-5-high"}
+        self.assertIn("claude-opus-5-5", runner.cost_gate(s, {"approval_models": ["claude-opus-5-5"]}, False))
+        s = {"agent": "agy", "effort": "low", "model": "claude-sonnet-5-5-low"}
+        self.assertIsNone(runner.cost_gate(s, {"approval_models": ["claude-opus-5-5"]}, False))
+
+    def test_cursor_keeps_only_its_api_key(self):
+        from crew import safety
+        env, stripped = safety.worker_env("cursor", {"CURSOR_API_KEY": "x", "OPENAI_API_KEY": "y"})
+        self.assertEqual((list(env), stripped), (["CURSOR_API_KEY"], ["OPENAI_API_KEY"]))
 
     def test_copilot_contract_and_tool_scope(self):
         (self.root / "nested").mkdir()
@@ -432,6 +552,11 @@ class WorkerHandoffTests(Base):
         settings = json.loads((self.runs.dir / "T-h2.agy-settings.json").read_text(encoding="utf-8"))
         self.assertEqual(settings["permissions"]["allow"], [f"write_file({s['handoff_slot']})"])
         self.assertIs(settings["allowNonWorkspaceAccess"], False)
+        deny = settings["permissions"]["deny"]
+        self.assertTrue(any(r.endswith("/.git)") for r in deny), deny)
+        slot = Path(s["handoff_slot"])
+        for ancestor in [slot, *slot.parents][:-1]:
+            self.assertFalse([r for r in deny if r.endswith("/%s)" % ancestor.as_posix())], (ancestor, deny))
 
     def test_requires_read_mode_and_no_add_dirs(self):
         p = self.contract(tid="T-h3", mode="write", wp="[src]")
@@ -506,6 +631,15 @@ class RunTests(Base):
         code, s = self.run_task("transient_write", mode="write", wp="[src]", retries=1)
         self.assertEqual(len(s["attempts"]), 1)
         self.assertEqual(s["status"], "FAILED")
+
+    def test_network_disabled_codex_sandbox_is_a_guard(self):
+        os.environ["CODEX_SANDBOX_NETWORK_DISABLED"] = "1"
+        code, out, err = crew("run", "--contract", str(self.contract()))
+        self.assertEqual(code, 3)
+        self.assertIn("network-disabled Codex sandbox", out + err)
+        self.assertIsNone(self.runs.load_state("T-1"))
+        code, out, _ = crew("detect", "--json")
+        self.assertTrue(json.loads(out)["sandbox_network_disabled"])
 
     def test_usage_limit_no_retry(self):
         code, s = self.run_task("usage_limit", retries=1)
@@ -723,18 +857,18 @@ class ConcurrencyTests(Base):
         atomic_write_text(target, '{"a": 1}')  # must retry until the reader closes
         self.assertEqual(target.read_text(encoding="utf-8"), '{"a": 1}')
 
-    def test_three_parallel_reads(self):
-        procs = [self._spawn(self.contract(tid=f"P-{i}")) for i in range(3)]
+    def test_five_parallel_reads(self):
+        procs = [self._spawn(self.contract(tid=f"P-{i}")) for i in range(5)]
         outs = [p.communicate(timeout=120) for p in procs]
         codes = [p.returncode for p in procs]
         errs = [o[1].decode("utf-8", "replace") for o in outs]
-        self.assertEqual(codes, [0, 0, 0], errs)
-        for i in range(3):
+        self.assertEqual(codes, [0] * 5, errs)
+        for i in range(5):
             self.assertEqual(self.runs.load_state(f"P-{i}")["status"], "DONE")
 
-    def test_fourth_read_refused(self):  # T-18 second case
+    def test_sixth_read_refused(self):  # T-18 second case
         os.environ["CREW_TEST_HARD_TIMEOUT_S"] = "15"
-        procs = [self._spawn(self.contract(tid=f"Q-{i}"), "sleep") for i in range(4)]
+        procs = [self._spawn(self.contract(tid=f"Q-{i}"), "sleep") for i in range(6)]
         for p in procs:
             p.communicate(timeout=120)
         codes = sorted(p.returncode for p in procs)
@@ -814,13 +948,95 @@ class SafetyTests(Base):
         self.assertEqual(code, 0, s)
         settings = json.loads((self.runs.dir / "T-1.agy-settings.json").read_text(encoding="utf-8"))
         self.assertEqual(settings["permissions"]["allow"], [])
+        self.assertNotIn("deny", settings["permissions"])
         self.assertIs(settings["allowNonWorkspaceAccess"], False)
+
+    def agy_tree(self):
+        for rel in ("README.md", "docs/notes.md", "src/calc.py", "src/other.py"):
+            (self.root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / rel).write_text("x\n", encoding="utf-8")
+        base = str(self.root.resolve()).replace("\\", "/")
+        return lambda rel: f"write_file({base}/{rel})"
+
+    def test_agy_deny_rules_cover_siblings_of_an_allowed_file(self):
+        rule = self.agy_tree()
+        deny = runner.agy_deny_rules(self.root, ["src/calc.py"])
+        for rel in ("README.md", "docs", "src/other.py"):
+            self.assertIn(rule(rel), deny)
+        for rel in ("src", "src/calc.py", "docs/notes.md"):
+            self.assertNotIn(rule(rel), deny)
+
+    def test_agy_deny_rules_keep_an_allowed_folder_writable(self):
+        rule = self.agy_tree()
+        deny = runner.agy_deny_rules(self.root, ["src/"])
+        self.assertIn(rule("docs"), deny)
+        self.assertIn(rule("README.md"), deny)
+        self.assertFalse([r for r in deny if r.startswith(rule("src")[:-1])], deny)
+
+    def test_agy_deny_rules_for_a_path_still_to_be_created(self):
+        rule = self.agy_tree()
+        deny = runner.agy_deny_rules(self.root, ["handoffs/2026-11-23/1200-agy-t.md"])
+        self.assertIn(rule("src"), deny)
+        self.assertNotIn(rule("handoffs"), deny)
+        self.assertEqual(runner.agy_deny_rules(self.root, []), [])
+
+    def test_agy_deny_rules_normalize_dot_segments(self):
+        rule = self.agy_tree()
+        deny = runner.agy_deny_rules(self.root, ["docs/../src/./calc.py"])
+        self.assertEqual(deny, runner.agy_deny_rules(self.root, ["src/calc.py"]))
+        self.assertNotIn(rule("src"), deny)
+        self.assertEqual(runner.agy_deny_rules(self.root, ["."]), [])
+        self.assertEqual(runner.agy_deny_rules(self.root, ["src/.."]), [])
+
+    def test_agy_deny_rules_keep_a_folder_allowed_beside_a_file_inside_it(self):
+        rule = self.agy_tree()
+        for allowed in (["src", "src/calc.py"], ["src/calc.py", "src/"]):
+            deny = runner.agy_deny_rules(self.root, allowed)
+            self.assertNotIn(rule("src/other.py"), deny, allowed)
+            self.assertIn(rule("docs"), deny, allowed)
+
+    @unittest.skipUnless(os.name == "nt", "directory junctions")
+    def test_agy_deny_rules_follow_a_linked_folder_to_its_target(self):
+        import _winapi
+        rule = self.agy_tree()
+        _winapi.CreateJunction(str(self.root / "src"), str(self.root / "alias"))
+        deny = runner.agy_deny_rules(self.root, ["alias/calc.py"])
+        self.assertNotIn(rule("src"), deny)
+        self.assertNotIn(rule("alias"), deny)
+        self.assertIn(rule("docs"), deny)
+
+    @unittest.skipUnless(os.name == "nt", "case-insensitive paths")
+    def test_agy_deny_rules_match_case_insensitively_on_windows(self):
+        rule = self.agy_tree()
+        deny = runner.agy_deny_rules(self.root, ["SRC/Calc.py"])
+        self.assertNotIn(rule("src"), deny)
+        self.assertNotIn(rule("src/calc.py"), deny)
+        self.assertIn(rule("src/other.py"), deny)
+
+    def test_agy_write_settings_deny_files_outside_write_paths(self):
+        self.agy_tree()
+        code, s = self.run_task("write_inside", agent="agy", mode="write", wp="[src]")
+        self.assertEqual(code, 0, s)
+        settings = json.loads((self.runs.dir / "T-1.agy-settings.json").read_text(encoding="utf-8"))
+        self.assertEqual(settings["permissions"]["allow"], ["write_file(src/)"])
+        self.assertEqual(settings["permissions"]["deny"], runner.agy_deny_rules(self.root, ["src"]))
+        self.assertTrue(any(r.endswith("/docs)") for r in settings["permissions"]["deny"]))
 
     def test_run_with_result(self):
         os.environ["FAKE_SCENARIO"] = "done"
         code, out, _ = crew("run", "--contract", str(self.contract()), "--with-result", "--json")
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out)["result_text"], crew("result", "T-1")[1].rstrip("\n"))
+        self.assertEqual(json.loads(out)["unverified_citations"], [])
+        code, out, _ = crew("run", "--contract", str(self.contract(tid="T-2")), "--with-result")
+        self.assertIn("citations: none unverified", out)
+
+    def test_context_todo_is_a_warning(self):
+        p = self.contract(tid="T-ctx")
+        p.write_text(p.read_text(encoding="utf-8").replace("## Context\nNone.", "## Context\nTODO: paths"), encoding="utf-8")
+        code, out, _ = crew("contract", "check", str(p))
+        self.assertEqual(code, 0)
+        self.assertIn("'## Context' is missing or still a TODO placeholder", out)
 
     def test_boundary_check_failure_requires_verification(self):
         from unittest.mock import patch
@@ -869,6 +1085,110 @@ class VerdictTests(Base):
         self.assertEqual(code, 3)
 
 
+# ------------------------------------------------------------ detach / wait
+
+class DetachWaitTests(Base):
+    """`crew run --detach` starts a real detached controller process (fake worker); `crew wait` never stops runs."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ["CREW_TEST_POLL_S"] = "0.1"
+
+    def wait_until_ended(self, tid, limit=60):
+        end = time.monotonic() + limit
+        while time.monotonic() < end:
+            s = self.runs.load_state(tid) or {}
+            if s.get("ended") and not s.get("status") == "RUNNING":
+                return s
+            time.sleep(0.2)
+        self.fail(f"{tid} did not end")
+
+    def test_detach_then_wait(self):
+        os.environ["FAKE_SCENARIO"] = "done"
+        code, out, _ = crew("run", "--contract", str(self.contract()), "--detach")
+        self.assertEqual(code, 0, out)
+        self.assertTrue("RUNNING (detached" in out or "task T-1: DONE" in out, out)
+        code, out, _ = crew("wait", "T-1", "--with-result")
+        self.assertEqual(code, 0, out)
+        self.assertIn("task T-1: DONE", out)
+        self.assertIn("citations:", out)
+        s = self.wait_until_ended("T-1")
+        self.assertTrue(s.get("detach_token"))
+        log = f"T-1.detach-{s['detach_token'][:8]}.log"
+        self.assertIn(log, s["files"])
+        self.assertTrue(self.runs.file(log).is_file())
+
+    def test_refusal_after_reservation_keeps_its_exit_code(self):
+        cfg = self.root / "inline.toml"
+        cfg.write_text('agy_prompt_mode = "inline"\n', encoding="utf-8")
+        os.environ["CREW_CONFIG"] = str(cfg)
+        p = self.contract(agent="agy")
+        p.write_text(p.read_text(encoding="utf-8") + "\n" + "x" * 40000 + "\n", encoding="utf-8")
+        fg = crew("run", "--contract", str(p))
+        self.assertEqual(fg[0], 2, fg)  # foreground: agy command line too long, after the reservation
+        p2 = self.contract(tid="T-2", agent="agy")
+        p2.write_text(p2.read_text(encoding="utf-8") + "\n" + "x" * 40000 + "\n", encoding="utf-8")
+        code, out, _ = crew("run", "--contract", str(p2), "--detach")
+        self.assertEqual(code, 2, out)
+        self.assertIn("command line too long", out)
+        self.assertNotIn("RUNNING (detached", out)
+
+    def test_wait_any_returns_with_another_still_running(self):
+        os.environ["CREW_TEST_HARD_TIMEOUT_S"] = "4"
+        os.environ["FAKE_SCENARIO"] = "sleep"
+        self.assertEqual(crew("run", "--contract", str(self.contract()), "--detach")[0], 0)
+        os.environ["FAKE_SCENARIO"] = "done"
+        self.assertEqual(crew("run", "--contract", str(self.contract(tid="T-2")), "--detach")[0], 0)
+        code, out, _ = crew("wait", "T-1", "T-2", "--any", "--json")
+        self.assertEqual(code, 0, out)
+        data = json.loads(out)
+        self.assertEqual([s["task_id"] for s in data["finished"]], ["T-2"])
+        self.assertEqual(data["running"], ["T-1"])
+        self.assertFalse(data["timed_out"])
+        self.wait_until_ended("T-1")
+
+    def test_detach_guard_is_synchronous(self):
+        self.run_task("done")
+        code, out, _ = crew("run", "--contract", str(self.contract()), "--detach")
+        self.assertEqual(code, 5, out)  # duplicate task ID, refused by the child before any worker starts
+        self.assertNotIn("RUNNING (detached", out)
+        self.assertEqual(list(self.runs.dir.glob("T-1.detach-*.log")), [])  # no log left that crew clean cannot see
+
+    def test_wait_timeout_keeps_the_run_and_any(self):
+        os.environ["FAKE_SCENARIO"] = "sleep"
+        os.environ["CREW_TEST_HARD_TIMEOUT_S"] = "4"
+        code, out, _ = crew("run", "--contract", str(self.contract()), "--detach")
+        self.assertEqual(code, 0, out)
+        self.assertIn("RUNNING (detached", out)
+        code, out, _ = crew("wait", "--timeout-min", "0.02")
+        self.assertEqual(code, 10, out)
+        self.assertIn("still running: T-1 (wait timed out)", out)
+        self.assertEqual((self.runs.load_state("T-1") or {}).get("status"), "RUNNING")
+        code, out, _ = crew("wait", "T-1", "--any", "--json")
+        self.assertEqual(code, 0, out)
+        data = json.loads(out)
+        self.assertEqual([s["task_id"] for s in data["finished"]], ["T-1"])
+        self.assertFalse(data["timed_out"])
+        self.wait_until_ended("T-1")
+
+    def test_wait_reports_a_dead_controller_without_changing_state(self):
+        self.runs.ensure()
+        dead = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
+                              capture_output=True, text=True, check=True)
+        state = {"task_id": "T-9", "status": "RUNNING", "agent": "codex", "mode": "read",
+                 "crew_pid": int(dead.stdout), "crew_create_time": 1.0, "worker_pid": None, "attempts": []}
+        self.runs.save_state(state)
+        code, out, _ = crew("wait", "T-9")
+        self.assertEqual(code, 0, out)
+        self.assertIn("task T-9: STALE? (the crew process is gone; worker alive: no", out)
+        self.assertEqual(self.runs.load_state("T-9")["status"], "RUNNING")
+
+    def test_wait_usage(self):
+        self.assertEqual(crew("wait")[1].strip(), "no running tasks")
+        self.assertEqual(crew("wait", "T-none")[0], 2)
+        self.assertEqual(crew("wait", "--timeout-min", "61")[0], 2)
+
+
 # ------------------------------------------------------------ handoff / clean / snapshot
 
 class MiscTests(Base):
@@ -888,6 +1208,42 @@ class MiscTests(Base):
                                    "--task", "review", "--status", "Done")
             self.assertEqual(code, 0)
             self.assertIn("- T-1: " + check, Path(output.strip()).read_text(encoding="utf-8"))
+
+    def test_handoff_cutoff_ignores_worker_handoffs(self):
+        self.run_task()
+        slot = "handoffs/2099-01-01/0000-codex-t-1.md"  # newest file, written by the worker during its run
+        (self.root / slot).parent.mkdir(parents=True)
+        (self.root / slot).write_text("# worker handoff\n", encoding="utf-8")
+        s = self.runs.load_state("T-1")
+        s["handoff_slot"] = slot
+        self.runs.save_state(s)
+        path = Path(crew("handoff", "--agent", "main", "--task", "t", "--status", "Done")[1].strip())
+        self.assertIn("- T-1: agent=", path.read_text(encoding="utf-8"))
+
+    def test_model_mismatch(self):
+        mm = cli.model_mismatch
+        self.assertFalse(mm("sonnet", "claude-sonnet-5-5"))
+        self.assertFalse(mm("GPT-6.2-astra", "gpt-6.2-astra"))
+        self.assertFalse(mm("gemini-4-neon-low", "gemini-4-neon-low,gemini-4-flash"))
+        for requested, actual in ((None, "x"), ("auto", "x"), ("default", "x"), ("sonnet", None), ("sonnet", "")):
+            self.assertFalse(mm(requested, actual), (requested, actual))
+        self.assertTrue(mm("sonnet", "claude-opus-5-5"))
+        self.assertTrue(mm("gpt-6.2-astra", "gpt-6.2-sol"))
+        lines = cli.summarize({"task_id": "T", "status": "DONE", "model_requested": "sonnet",
+                               "model_actual": "claude-opus-5-5"})
+        self.assertTrue(any(ln.startswith("MODEL WARNING: the contract requested sonnet") for ln in lines))
+
+    def test_handoff_check_lists_todo_placeholders(self):
+        path = Path(crew("handoff", "--agent", "main", "--task", "t", "--status", "Done")[1].strip())
+        code, out, _ = crew("handoff", "--check")
+        self.assertEqual(code, 2)
+        self.assertIn("TODO left: line", out)
+        text = path.read_text(encoding="utf-8")
+        path.write_text("\n".join("- filled" if ln.lstrip().startswith("- TODO") else ln for ln in text.splitlines())
+                        + "\n- a note that mentions TODO later\n", encoding="utf-8")
+        code, out, _ = crew("handoff", "--check", str(path))
+        self.assertEqual(code, 0, out)
+        self.assertNotEqual(crew("handoff", "--agent", "main")[0], 0)
 
     def test_clean_dry_run_and_verification(self):
         sess = self.root / "_codex_home" / "sessions" / "2026"
@@ -1375,6 +1731,22 @@ class EvalRestTests(Base):
         code, _, err = crew("detect")
         self.assertEqual(code, 2, err)
         self.assertIn("invalid config file", err)
+        for bad in ("max_concurrent = 0\n", 'max_concurrent = "4"\n'):
+            cfg.write_text(bad, encoding="utf-8")
+            code, _, err = crew("detect")
+            self.assertEqual(code, 2, (bad, err))
+            self.assertIn("max_concurrent must be an integer", err)
+        os.environ["CREW_CONFIG"] = str(self.root)  # a directory, not a file
+        code, _, err = crew("detect")
+        self.assertEqual(code, 2, err)
+        self.assertNotIn("Traceback", err)
+
+    def test_status_skips_state_file_with_invalid_utf8(self):
+        self.run_task()
+        self.runs.state_path("T-bad").write_bytes(b'{"task_id": "T-bad", "x": "\xff"}')
+        code, out, err = crew("status")
+        self.assertEqual(code, 0, err)
+        self.assertIn("T-1", out)
 
 
 if __name__ == "__main__":

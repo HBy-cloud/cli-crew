@@ -25,15 +25,27 @@ KST = timezone(timedelta(hours=9))
 
 TASK_ID_RE = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
 
-AGENTS = ("codex", "agy", "claude", "copilot")
+AGENTS = ("codex", "agy", "claude", "copilot", "cursor")
 
 EFFORTS = {
     "codex": ("low", "medium", "high", "xhigh"),
     "agy": ("low", "medium", "high", "xhigh", "max"),
     "claude": ("low", "medium", "high", "xhigh", "max"),
     "copilot": ("low",),
+    "cursor": ("low",),  # the cursor model ID carries its effort
 }
 HIGH_EFFORTS = {"high", "xhigh", "max"}
+
+# agy model IDs that carry their effort (claude-sonnet-5-5-low); agy rejects a different --effort.
+MODEL_EFFORT_SUFFIX = r"-(low|medium|high|xhigh|max)$"
+
+
+def approval_match(model: str | None, approval: list[str]) -> str | None:
+    """The approval_models entry that `model` starts with (case-insensitive), so effort variants match too."""
+    if not model:
+        return None
+    return next((a for a in approval if isinstance(a, str) and a and model.lower().startswith(a.lower())), None)
+
 
 SNAPSHOT_EXCLUDE_DIRS = {
     ".git", ".agent-runs", "node_modules", ".venv", "venv", "__pycache__", "dist", "build",
@@ -45,7 +57,7 @@ SECRET_NAME_PATTERNS = (
 )
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "max_concurrent": 3,
+    "max_concurrent": 5,
     "default_timeout_min": 20,
     "default_effort": "low",
     "approval_models": [],
@@ -202,7 +214,8 @@ def atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+        # Worker text can carry lone surrogates from escaped JSON; never let them abort a run's records.
+        with os.fdopen(fd, "w", encoding="utf-8", errors="replace", newline="\n") as f:
             f.write(text)
         _replace_with_retry(tmp, path)
     except BaseException:
@@ -240,13 +253,22 @@ def config_path() -> Path:
 def load_config() -> dict[str, Any]:
     cfg = dict(DEFAULT_CONFIG)
     path = config_path()
-    if path.exists():
-        try:
-            with open(path, "rb") as f:
-                data = tomllib.load(f)
-        except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
-            raise CrewError(EXIT_USAGE, f"invalid config file {path}: {e}") from e
+    data = None
+    try:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+    except FileNotFoundError:
+        pass  # no config: defaults
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError, OSError) as e:
+        raise CrewError(EXIT_USAGE, f"invalid config file {path}: {e}") from e
+    if data is not None:
         for key in DEFAULT_CONFIG:
             if key in data:
                 cfg[key] = data[key]
+        am = cfg["approval_models"]
+        if not isinstance(am, list) or not all(isinstance(m, str) and m.strip() for m in am):
+            raise CrewError(EXIT_USAGE, f"invalid config file {path}: approval_models must be a list of model id strings")
+        mc = cfg["max_concurrent"]
+        if not isinstance(mc, int) or isinstance(mc, bool) or mc < 1:
+            raise CrewError(EXIT_USAGE, f"invalid config file {path}: max_concurrent must be an integer of 1 or more")
     return cfg

@@ -18,10 +18,14 @@ UNVERIFIED_PATTERNS = [
     r"\bEPERM\b", r"CreateProcessAsUserW", r"access is denied", r"액세스가 거부",
 ]
 USAGE_LIMIT_PATTERNS = [
-    r"usage limit", r"quota", r"exceeded your", r"insufficient_quota", r"limit reached",
+    # Bare "quota" is too broad: agy logs "Failed to retrieve user quota summary" when it has no network.
+    r"usage limit", r"quota (exceeded|exhausted|reached)", r"(exceeded|out of) (your |the )?quota", r"exceeded your",
+    r"insufficient_quota", r"limit reached",
 ]
+# A refused connection (no network, sandbox, firewall) does not clear on an immediate retry.
+NETWORK_BLOCK_PATTERNS = [r"ECONNREFUSED", r"connection refused", r"firewall or proxy"]
 TRANSIENT_PATTERNS = [
-    r"ECONNRESET", r"ETIMEDOUT", r"ECONNREFUSED", r"connection (reset|refused|closed|error)",
+    r"ECONNRESET", r"ETIMEDOUT", r"connection (reset|closed|error)",
     r"\b50[234]\b", r"service unavailable", r"\b429\b", r"rate[ _-]?limit", r"overloaded",
     r"stream disconnected", r"network error",
 ]
@@ -41,7 +45,8 @@ def last_result_block(text: str) -> str | None:
 
 def parse_review_block(text: str) -> dict[str, Any]:
     """Reviewer output: '## REVIEW' block with VERDICT (PASS | FAIL | PARTIAL) and per-criterion lines (met | unmet | unverified)."""
-    m = re.search(r"(?ms)^## REVIEW[ \t]*\r?$(.*?)(?=^## |\Z)", text)
+    blocks = list(re.finditer(r"(?ms)^## REVIEW[ \t]*\r?$(.*?)(?=^## |\Z)", text))
+    m = blocks[-1] if blocks else None  # the last review wins over an earlier draft
     if not m:
         return {"verdict": None, "criteria": 0}
     block = m.group(1)
@@ -68,6 +73,12 @@ def parse_result_block(text: str) -> dict[str, Any]:
     return {"block": block, "status": status if status in WORKER_STATUSES else None, "fields": fields}
 
 
+def _failure(diag: list[str], fallback: str) -> str:
+    if _any(NETWORK_BLOCK_PATTERNS, diag):
+        return "network_blocked"
+    return "transient" if _any(TRANSIENT_PATTERNS, diag) else fallback
+
+
 def classify(p: Parsed, *, exit_code: int | None, timed_out: bool, cancelled: bool) -> tuple[str, str | None, str | None]:
     """Return (status, failure_reason, worker_status)."""
     rb = parse_result_block(p.final_text or "")
@@ -81,18 +92,15 @@ def classify(p: Parsed, *, exit_code: int | None, timed_out: bool, cancelled: bo
     if _any(USAGE_LIMIT_PATTERNS, diag):
         return "FAILED", "usage_limit", ws
     if exit_code not in (0, None):
-        reason = "transient" if _any(TRANSIENT_PATTERNS, diag) else f"exit_{exit_code}"
-        return "FAILED", reason, ws
+        return "FAILED", _failure(diag, f"exit_{exit_code}"), ws
     if p.is_error:
-        reason = "transient" if _any(TRANSIENT_PATTERNS, diag) else "worker_error"
-        return "FAILED", reason, ws
+        return "FAILED", _failure(diag, "worker_error"), ws
     if ws == "failed":
         return "FAILED", "worker_reported_failed", ws
     if _any(BLOCK_PATTERNS, signals) or p.permission_denials or ws == "blocked":
         return "BLOCKED", "blocked", ws
     if not (p.final_text or "").strip():
-        reason = "transient" if _any(TRANSIENT_PATTERNS, diag) else "empty_response"
-        return "FAILED", reason, ws
+        return "FAILED", _failure(diag, "empty_response"), ws
     if ws in (None, "partial"):
         return "PARTIAL", "no_result_block" if rb["block"] is None else ("invalid_status" if ws is None else "partial"), ws
     if _any(UNVERIFIED_PATTERNS, signals):

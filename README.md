@@ -4,13 +4,13 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776ab.svg)
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078d4.svg)
-![Version 0.1.0](https://img.shields.io/badge/version-0.1.0-informational.svg)
+![Version 0.1.1](https://img.shields.io/badge/version-0.1.1-informational.svg)
 
 **English** · [한국어](README.ko.md)
 
 **Delegate scoped tasks between AI coding CLIs, verify the results, and keep the evidence in your project.**
 
-cli-crew lets the AI CLI you are already using (the *main* agent) hand bounded work to Codex, Claude Code, and Antigravity. GitHub Copilot CLI is also available as an opt-in worker for small single-file edits. A skill tells the main agent when delegation is worth it and how to verify the result. The Python CLI, `crew`, launches workers in safe modes, enforces timeouts and approvals, checks file boundaries, and records every run. The main agent always makes the final call.
+cli-crew lets the AI CLI you are already using (the *main* agent) hand bounded work to Codex, Claude Code, Antigravity, and Cursor CLI. GitHub Copilot CLI is also available as an opt-in worker for small single-file edits. A skill tells the main agent when delegation is worth it and how to verify the result. The Python CLI, `crew`, launches workers in safe modes, enforces timeouts and approvals, checks file boundaries, and records every run. The main agent always makes the final call.
 
 ![The main agent defines a contract, a worker runs it, and the main agent verifies the result.](docs/assets/workflow.svg)
 
@@ -20,7 +20,7 @@ cli-crew lets the AI CLI you are already using (the *main* agent) hand bounded w
 
 - **Goal-driven delegation.** You state the outcome. The main agent decides what to do itself, what to give its own subagents, what to hand to a worker, and when an independent review from a different model is worth the extra call.
 - **Plans for multi-step goals.** Before starting, the main agent writes a plan (a *cplan*) in which each step names its executor (itself, its own built-in subagents, or a crew worker), its dependencies, and how it will be verified. When evidence changes the plan, the change and its reason are recorded. Runs are linked to steps, so progress survives a handoff.
-- **Independent review.** Plans call for a reviewer on a different model for each deliverable. If the review is skipped, the main agent records the reason in the plan. `crew` records the reviewer's verdict and the response retains the evidence.
+- **Independent review.** Plans call for a reviewer on a different model for each deliverable. If the review is skipped, the main agent records the reason in the plan. `crew` records the reviewer's verdict and the response retains the evidence. `crew plan check` warns when a reviewer may run on the same model as the author and, once both steps have runs, when they reported the same model; a run summary shows `MODEL WARNING` when a worker reports a different model than the contract requested.
 - **Explicit task contracts.** Each delegated task is a Markdown contract with an objective, file paths for context, completion criteria, and, for edits, the exact paths the worker may change.
 - **Verification before acceptance.** `crew` classifies runs and checks for detectable out-of-scope changes and subagent use. The main agent records acceptance or rejection and can attach its verification with `--verified`.
 - **Guardrails by default.** Read-only mode is the default, writes run one at a time, and credential-like environment variables are stripped from worker processes. Higher-cost runs and delegation when Crew detects sensitive-data hints in project instructions require approval.
@@ -42,7 +42,7 @@ cli-crew is currently verified on **Windows 11** only.
 **Requirements**
 
 - Git, PowerShell 7 (`pwsh`), Python 3.12 or later, and [uv](https://docs.astral.sh/uv/)
-- At least one installed and signed-in worker CLI. Use [Codex CLI](https://github.com/openai/codex), Claude Code, Antigravity (`agy`), or a dedicated GitHub Copilot CLI profile for single-file edits.
+- At least one installed and signed-in worker CLI. Use [Codex CLI](https://github.com/openai/codex), Claude Code, Antigravity (`agy`), Cursor CLI (`cursor-agent`), or a dedicated GitHub Copilot CLI profile for single-file edits.
 
 **Install**
 
@@ -59,6 +59,18 @@ The base installation has no third-party Python runtime dependencies. To enable 
 
 The installer registers the skill for Claude Code, Codex, and agy. To choose clients, pass `-Agents`, for example `pwsh -File scripts/install-skill.ps1 -Agents claude,codex`. Claude Code and Codex use directory junctions to the clone, and agy registers the skill directory in `~/.gemini/config/skills.json`, so keep the clone where it is. If a new terminal cannot find `crew`, run `uv tool update-shell` and reopen the terminal.
 
+**macOS and Linux (not verified)**
+
+The skill installer and the shared CLI session are Windows only. Install `crew` with `uv tool install ./crew`, then link the skill by hand from the clone (`ln -sn` fails instead of nesting a link if one already exists):
+
+```sh
+mkdir -p ~/.claude/skills "${CODEX_HOME:-$HOME/.codex}/skills"
+ln -sn "$PWD/skill/cli-crew" ~/.claude/skills/cli-crew
+ln -sn "$PWD/skill/cli-crew" "${CODEX_HOME:-$HOME/.codex}/skills/cli-crew"
+```
+
+For agy, add `{"path": "<clone>/skill"}` to the `entries` list in `~/.gemini/config/skills.json`. Use `python3` where this guide shows `py -3`. On macOS, `crew cancel` cannot confirm a worker's identity, so stop an orphaned worker yourself.
+
 ## Quick start
 
 Open your **target project** in a new AI CLI session and describe the outcome you want:
@@ -74,8 +86,8 @@ The main agent may fix a small bug directly. If an independent check helps, it c
 | Main CLI | How to invoke | Status |
 | --- | --- | --- |
 | Claude Code | `/cli-crew <your goal>` | Verified in interactive and headless sessions |
-| Codex | `$cli-crew <your goal>` | Skill loading verified; Codex as main is less tested |
-| Antigravity (`agy`) | Mention `cli-crew` in your request | Skill loading verified; agy as main is less tested |
+| Codex | `$cli-crew <your goal>` | Follows the skill as main. Run it interactively or with network access: inside the default `codex exec` sandbox, workers it launches cannot reach their providers, so `crew run` stops with exit 3 and `crew detect` warns |
+| Antigravity (`agy`) | Mention `cli-crew` in your request | Skill loading verified. Use it interactively as main: headless `agy --print` denies the shell commands crew needs. For parallel runs use agy's own background mode: it stops `crew run --detach` when the command returns |
 
 Example: `/cli-crew Fix the CSV export bug, then have another model review the change.`
 
@@ -85,7 +97,7 @@ Even when invoked, the main agent still decides what to delegate. Small tasks ar
 
 ### Use GitHub Copilot CLI for a small edit
 
-In PowerShell, set up a dedicated Copilot profile outside the target project. Sign in and disable hooks once for that profile.
+In PowerShell on Windows, set up a dedicated Copilot profile outside the target project. Sign in and disable hooks once for that profile.
 
 ```powershell
 $env:COPILOT_HOME = Join-Path $env:LOCALAPPDATA 'crew-copilot-profile'
@@ -118,7 +130,7 @@ The main agent normally runs these for you. You can also use them directly in Po
 | Plan a multi-step goal | `crew plan new`, `crew plan check`, `crew plan show` |
 | Choose a worker | `crew routing`, `crew compare` |
 | Define the task | `crew contract new`, `crew contract check` |
-| Run and monitor | `crew run`, `crew status`, `crew cancel`, `crew trace view` |
+| Run and monitor | `crew run` (`--detach`), `crew wait`, `crew status`, `crew cancel`, `crew trace view` |
 | Verify and decide | `crew result`, `crew check`, `crew accept`, `crew reject` |
 | Hand off and clean up | `crew handoff`, `crew clean` |
 
@@ -168,18 +180,19 @@ Example: a worker can report success even when the final file-boundary check fai
 | Codex (`codex`) | Yes | Paths named in the contract | Any file the user can read |
 | Claude Code (`claude`) | Yes | Paths named in the contract | Project and listed directories only |
 | Antigravity (`agy`) | Yes | Paths named in the contract. See boundary check limits below. | Any file the user can read |
+| Cursor CLI (`cursor`) | Yes | Paths named in the contract, checked after the run only. See boundary check limits below. | Any file the user can read |
 | GitHub Copilot CLI (`copilot`) | — | One existing non-secret file | Files in the project |
 
-Adapters were verified with codex-cli 0.171.0, agy 1.5.14, Claude Code 2.1.330, and GitHub Copilot CLI 1.0.112. Re-check after upgrading a CLI. See [worker adapters and Copilot setup](skill/cli-crew/references/adapters.md#github-copilot-cli-setup).
+Adapters were verified with codex-cli 0.172.0, agy 1.5.18, Claude Code 2.1.332, GitHub Copilot CLI 1.0.112, and Cursor CLI 2026.11.22-e9042b2. Re-check after upgrading a CLI. See [worker adapters and Copilot setup](skill/cli-crew/references/adapters.md#github-copilot-cli-setup).
 
 ## Safety model and limitations
 
-- **Concurrency.** Up to three independent read tasks can run at once by default (`max_concurrent`). A write task always runs alone. Reservations take an OS file lock on `.agent-runs/locks/reserve.lock`, which is released if the holder dies; do not run an older `crew` version on the same project at the same time.
+- **Concurrency.** Up to five independent read tasks can run at once by default (`max_concurrent`). The skill hands independent reads to parallel helpers by default, because main's own tokens are a cost; `crew plan check` warns when independent steps all stay on main. Start parallel runs with the main CLI's own background mode, or with `crew run --detach` and then `crew wait` when it has none. A write task always runs alone. Reservations take an OS file lock on `.agent-runs/locks/reserve.lock`, which is released if the holder dies; do not run an older `crew` version on the same project at the same time.
 - **Shell commands, builds, and tests.** The workflow assigns these to the main agent. Codex uses its filesystem sandbox and a worker instruction to use file tools. Shell restrictions depend on the CLI and environment. [Worker adapter restrictions](skill/cli-crew/references/adapters.md#known-behaviour)
-- **Boundary checks.** `crew` reports detectable changes inside the project. Writes outside the project escape this check. agy write tasks use per-session settings that block outside writes and overwrites of unlisted files. agy can create files inside the project, and the Git boundary check skips ignored files except those with secret-like names.
-- **Web access.** Workers may search and read the public web, but their instructions forbid sending project content, secrets or personal data. `crew` does not block the network. How much each CLI can actually fetch has not been re-verified.
-- **Data leaves your machine.** Workers use their own provider accounts, so delegated content goes to OpenAI, Anthropic, Google, or GitHub Copilot. If project instructions mention sensitive data, `crew run` requires explicit approval. If they restrict external agents, the main agent asks before delegating.
-- **Cost approval.** High reasoning effort, or models you list in `~/.crew/config.toml`, require approval before launch.
+- **Boundary checks.** `crew` reports detectable changes inside the project. Writes outside the project escape this check. agy write tasks use per-session settings that block writes outside the project and changes to the existing files and folders beside the write paths. agy can still create new files elsewhere in the project, such as its root or inside a write folder, and the Git boundary check skips ignored files except those with secret-like names. In testing Cursor's edit tool rejected an edit outside the project (shell commands that a user or project `cli.json` allows are not covered by that), and its file-permission rules did not stop edits to other project files in testing (and its sandbox is unavailable on Windows), so out-of-scope Cursor edits are only reported after the run.
+- **Web access.** Workers may search and read the public web, but their instructions forbid sending project content, secrets or personal data. `crew` does not block the network. In read-mode tests (2026-11-26) only Codex opened pages; Claude Code and Antigravity workers could search but not fetch pages, and Cursor was not tested.
+- **Data leaves your machine.** Workers use their own provider accounts, so delegated content goes to OpenAI, Anthropic, Google, GitHub Copilot, or Cursor (and the model provider it routes to). If project instructions mention sensitive data, `crew run` requires explicit approval. If they restrict external agents, the main agent asks before delegating.
+- **Cost approval.** High reasoning effort, or models matching an entry you list in `~/.crew/config.toml` (case-insensitive prefix, so `claude-opus-5-5` also covers `claude-opus-5-5-high`), require approval before launch. While that list is set, a run whose model cannot be resolved (for example Copilot or Cursor Auto) also needs approval.
 - **No automatic rollback.** `crew` reports violations but does not revert changes.
 
 The full rules are in the [verification and approval protocol](skill/cli-crew/references/protocol.md).
@@ -191,7 +204,7 @@ Built-in subagents and native swarms (such as Claude Code subagents or Antigravi
 | | Native subagents / swarms | Autonomy-first orchestrators (e.g. oh-my-claudecode) | cli-crew |
 | --- | --- | --- | --- |
 | Primary goal | Fast parallel exploration and edits inside one CLI | Run teams of agents until tests/build pass | Cross-provider audit, bounded delegation, and multi-CLI handoffs |
-| Providers & models | Same CLI / provider ecosystem | Claude Code driving external CLIs | Claude Code, Codex, or Antigravity as main or worker, plus GitHub Copilot CLI for small edits |
+| Providers & models | Same CLI / provider ecosystem | Claude Code driving external CLIs | Claude Code, Codex, or Antigravity as main or worker, Cursor CLI as worker, plus GitHub Copilot CLI for small edits |
 | Worker permissions | Shares session tools or isolated workspace branches | Headless workers can run with auto-approve flags | Restricted launch modes and contract-scoped edits. Shell restrictions vary by adapter. |
 | Edit & test loop | Workers can edit files and run tests directly | Automated verify/fix loops until tests, build, and lint pass | Write tasks run one at a time. The main agent runs tests and builds. |
 | Communication | Interactive multi-turn or shared message board | Automated multi-stage loop | One-shot contract execution (`codex exec`, `claude -p`, `agy --print`, `copilot -p`) |
@@ -249,7 +262,7 @@ The script removes only junctions and entries that point to this clone. Other ag
 
 ## Project status
 
-cli-crew is an early release (0.1.0). Windows installation, reinstallation, and removal are tested in disposable home directories. macOS and Linux have not been verified.
+cli-crew is an early release (0.1.1). Windows installation, reinstallation, and removal are tested in disposable home directories. macOS and Linux have not been verified.
 
 ## Development
 

@@ -107,16 +107,24 @@ def executor_model(executor: str) -> str | None:
 def _same_model(reviewer: str, author: str) -> str | None:
     """Reviewer independence is judged by model (2026-11-21 user decision). Returns 'agent/model' when the reviewer
     may run on the same model as the author: same CLI and the same model, or a model that cannot be told apart
-    (one side uses the CLI default). Copilot can select models also available via other CLIs."""
+    (one side uses the CLI default). Copilot and Cursor can select models also available via other CLIs, and
+    Claude models count as one model on every CLI (claude, agy, cursor, copilot; 2026-11-26 user decision)."""
     ra, ta = executor_agent(reviewer), executor_agent(author)
     if not ra or not ta:
         return None
     rm, tm = executor_model(reviewer), executor_model(author)
+    rm, tm = (None if m and m.lower() == "auto" else m for m in (rm, tm))  # Auto picks a model like the default
+
+    def claude_side(agent: str, model: str | None) -> bool:
+        return agent == "claude" or bool(model and model.lower().startswith("claude"))
+    if claude_side(ra, rm) and claude_side(ta, tm):
+        return f"{ra}/{rm or 'default'} and {ta}/{tm or 'default'} both run Claude models"
     if ra != ta:
-        if "copilot" not in (ra, ta):
+        multi = [a for a in (ra, ta) if a in ("copilot", "cursor")]
+        if not multi:
             return None
-        if not rm or not tm or "auto" in (rm.lower(), tm.lower()):
-            return "Copilot can use the same model as another CLI; verify the actual model"
+        if not rm or not tm:
+            return f"{multi[0].capitalize()} can use the same model as another CLI; verify the actual model"
         return rm if rm.lower() == tm.lower() else None
     if rm and tm and rm.lower() != tm.lower():
         return None
@@ -244,6 +252,39 @@ def _review_warnings(plan: Plan) -> list[str]:
     return out
 
 
+PARALLEL_NOTE = re.compile(r"(?i)parallel|병렬")
+
+
+def _parallel_warnings(plan: Plan) -> list[str]:
+    """Parallel-first rule (2026-11-26 user decision): main's own tokens are a cost, so two or more main steps that do
+    not depend on each other should be delegated in parallel, or a Revisions row must say why main does them."""
+    by_id = {s.step: s for s in plan.steps}
+
+    def ancestors(step_id: str, seen: set[str] | None = None) -> set[str]:
+        seen = set() if seen is None else seen
+        for d in by_id[step_id].depends_on if step_id in by_id else []:
+            if d not in seen:
+                seen.add(d)
+                ancestors(d, seen)
+        return seen
+    # Only open steps: finished work cannot be re-planned.
+    mains = [s.step for s in plan.steps if s.executor == "main" and not s.reviews and s.status in ("todo", "doing", "blocked")]
+    up = {m: ancestors(m) for m in mains}
+    free = sorted({a for a in mains for b in mains if a != b and a not in up[b] and b not in up[a]})
+    if not free:
+        return []
+    lines = [ln for ln in plan.sections.get("Revisions", "").splitlines() if PARALLEL_NOTE.search(ln)]
+    if not lines:
+        return [f"steps {', '.join(free)} run on main but do not depend on each other; delegate independent reads in "
+                "parallel (crew read workers or main-subagent, up to max_concurrent), or record in Revisions why main "
+                "does them (for example edits, shell or tests, or work that is tightly coupled)"]
+    if all(NOT_OK_SKIP.search(ln) and not re.search(r"(?i)edit|write|shell|test|build|coupled|수정|쓰기|셸|테스트|빌드|얽", ln)
+           for ln in lines):
+        return [f"steps {', '.join(free)}: 'small' or 'simple' is not an accepted reason to keep independent work on "
+                "main; name the coupling, edits, or shell/test work instead"]
+    return []
+
+
 def _handoff_missing(plan: Plan) -> bool:
     """True when the plan is stopped (abandoned, or has a blocked step) and no handoff file is newer than the plan file."""
     status = plan.fields.get("status")
@@ -312,6 +353,7 @@ def validate(plan: Plan) -> tuple[list[str], list[str]]:
             warnings.append(f"plan is done but steps are still open: {', '.join(open_steps)}")
 
     warnings.extend(_review_warnings(plan))
+    warnings.extend(_parallel_warnings(plan))
     if _handoff_missing(plan):
         warnings.append("NOTE: the plan is stopped (abandoned or a step is blocked) but no handoff is newer than it; run `crew handoff` and fill it in")
     rev_rows = [ln for ln in plan.sections.get("Revisions", "").splitlines() if ln.strip().startswith("|")]
@@ -341,8 +383,22 @@ def linked_runs(plan_id: str, records: list[dict[str, Any]]) -> dict[str, list[d
         seen.add(tid)
         out.setdefault(str(r.get("plan_step")), []).append({
             "task_id": tid, "agent": r.get("agent"), "status": r.get("status"), "verdict": r.get("verdict"),
+            "model": r.get("model_actual"),
         })
     return out
+
+
+def _observed_models(runs: list[dict[str, Any]]) -> set[str] | None:
+    """Recorded models of runs that were not rejected; None when one of them has no recorded model."""
+    models: set[str] = set()
+    for r in runs:
+        if r.get("verdict") == "REJECTED":
+            continue
+        names = {m.strip().lower() for m in str(r.get("model") or "").split(",") if m.strip()}
+        if not names:
+            return None
+        models |= names
+    return models
 
 
 def step_notes(plan: Plan, links: dict[str, list[dict[str, Any]]]) -> list[str]:
@@ -361,6 +417,23 @@ def step_notes(plan: Plan, links: dict[str, list[dict[str, Any]]]) -> list[str]:
                 notes.append(f"{s.step}: marked done without an accepted crew run")
         if s.status in ("todo", "dropped") and any(r.get("verdict") == "ACCEPTED" for r in runs):
             notes.append(f"{s.step}: has an accepted run but is marked {s.status}")
+        elif s.status == "todo" and runs:
+            notes.append(f"{s.step}: has linked runs but is still marked todo; set it to doing")
+        unjudged = [r["task_id"] for r in runs if not r.get("verdict")]
+        if s.status == "done" and unjudged:
+            notes.append(f"{s.step}: marked done but runs are not judged yet: {', '.join(unjudged)}")
+    for s in plan.steps:  # reviewer independence from the models the runs actually used
+        for target in s.reviews:
+            rev, auth = links.get(s.step, []), links.get(target, [])
+            if not rev or not auth:
+                continue
+            rm, am = _observed_models(rev), _observed_models(auth)
+            if rm is None or am is None:
+                notes.append(f"{s.step}: the actual model of a run on {s.step} or {target} is not recorded; "
+                             "check that the review ran on a different model")
+            elif rm & am or (any("claude" in m for m in rm) and any("claude" in m for m in am)):
+                same = ", ".join(sorted(rm & am)) or "Claude models"
+                notes.append(f"{s.step}: the review ran on the same model as {target} ({same}); it is not independent")
     unknown = sorted(k for k in links if plan.step(k) is None)
     for k in unknown:
         notes.append(f"runs reference unknown step '{k}': {', '.join(r['task_id'] for r in links[k])}")

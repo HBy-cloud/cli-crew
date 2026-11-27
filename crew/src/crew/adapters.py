@@ -11,17 +11,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from crew.classify import last_result_block
+from crew.classify import last_result_block, parse_result_block
 from crew.common import (
     EXIT_GUARD, EXIT_USAGE, SECRET_NAME_PATTERNS, CrewError, home_dir, is_secret_name, is_within, read_text, real, same_path,
 )
 
-FORBIDDEN_FLAGS = ("--dangerously", "bypassPermissions", "--allow-all", "--yolo")
+FORBIDDEN_FLAGS = ("--dangerously", "bypassPermissions", "--allow-all", "--yolo", "--force", "--auto-review",
+                   "--approve-mcps")
 AGY_MAX_CMDLINE_UTF16 = 30000
 
 # CLI versions these adapters were verified against (skill/cli-crew/references/adapters.md, SPEC 6).
 # Update together with that reference after re-verifying flags and output formats.
-VERIFIED_VERSIONS = {"codex": "0.171.0", "agy": "1.5.14", "claude": "2.1.330", "copilot": "1.0.112"}
+VERIFIED_VERSIONS = {"codex": "0.172.0", "agy": "1.5.18", "claude": "2.1.332", "copilot": "1.0.112", "cursor": "2026.11.22-e9042b2"}
 
 
 def version_number(text: str | None) -> str | None:
@@ -54,6 +55,8 @@ def binary_prefix(agent: str) -> list[str]:
         except json.JSONDecodeError:
             pass
         return [override]
+    if agent == "cursor":
+        return cursor_prefix()
     exe = shutil.which(agent)
     if os.name == "nt" and agent == "copilot" and (not exe or Path(exe).suffix.lower() != ".exe"):
         # The npm shim is a batch file. Launch its JavaScript entry point without a shell.
@@ -67,6 +70,25 @@ def binary_prefix(agent: str) -> list[str]:
     if not exe:
         raise CrewError(EXIT_USAGE, f"{agent} CLI not found on PATH")
     return [exe]
+
+
+def cursor_prefix() -> list[str]:
+    """cursor-agent. On Windows the .cmd/.ps1 launchers go through PowerShell; run the newest bundled node directly."""
+    exe = shutil.which("cursor-agent")
+    if not exe:
+        raise CrewError(EXIT_USAGE, "cursor CLI (cursor-agent) not found on PATH")
+    if os.name != "nt" or Path(exe).suffix.lower() == ".exe":
+        return [exe]
+    here = Path(exe).parent
+    if (here / "node.exe").is_file() and (here / "index.js").is_file():  # the launcher checks this layout first
+        return [str(here / "node.exe"), str(here / "index.js")]
+    versions = here / "versions"
+    dirs = [d for d in versions.iterdir() if re.match(r"^\d{4}\.\d{1,2}\.\d{1,2}", d.name)] if versions.is_dir() else []
+    dirs.sort(key=lambda d: ([int(x) for x in re.findall(r"\d+", d.name.split("-")[0])], d.name), reverse=True)
+    for d in dirs:
+        if (d / "node.exe").is_file() and (d / "index.js").is_file():
+            return [str(d / "node.exe"), str(d / "index.js")]
+    raise CrewError(EXIT_USAGE, f"cursor-agent bundle (node.exe, index.js) not found under {versions}")
 
 
 def cli_version(agent: str) -> str | None:
@@ -227,6 +249,16 @@ def build(agent: str, s: dict[str, Any], *, root: Path, add_dirs: list[Path], pr
         if os.name == "nt" and len(subprocess.list2cmdline(args).encode("utf-16-le")) // 2 > 30000:
             raise CrewError(EXIT_USAGE, "copilot command line too long; shorten the contract")
         inv = Invocation(args, None)
+    elif agent == "cursor":
+        # Effort is part of the cursor model ID; there is no effort flag. The prompt goes on stdin.
+        args = prefix + ["-p", "--trust", "--output-format", "stream-json", "--workspace", str(root)]
+        if mode == "read":
+            args += ["--mode", "ask"]
+            for d in add_dirs:
+                args += ["--add-dir", str(d)]
+        if model:
+            args += ["--model", model]
+        inv = Invocation(args, prompt_text)
     else:
         raise CrewError(EXIT_USAGE, f"unknown agent: {agent}")
     flags_end = -1 if agent == "copilot" else len(inv.args)
@@ -348,6 +380,9 @@ def parse(agent: str, stdout_path: Path, stderr_path: Path, result_path: Path) -
             elif result_obj.get("error"):
                 p.is_error = True
                 p.diag.append(f"agy error={result_obj.get('error')}")
+        if result_obj and result_obj.get("status") == "SUCCESS" and not p.is_error:
+            # agy reports input_tokens including cache reads; total_tokens = input + output (1.5.15-1.5.18).
+            p.tokens = _token_sum(result_obj.get("usage"), ("total_tokens",))
         if not result_obj or result_obj.get("status") != "SUCCESS" or p.is_error:
             p.diag.extend(step_errors)
         messages = ["".join(steps[i]) for i in sorted(steps)]
@@ -394,8 +429,63 @@ def parse(agent: str, stdout_path: Path, stderr_path: Path, result_path: Path) -
                 p.subagent_used = (ss.get("spawned") or 0) > 0
             if p.is_error:
                 p.diag.append(f"claude is_error subtype={data.get('subtype')} api_error_status={data.get('api_error_status')}")
+                p.diag.append(f"claude error result: {p.final_text[:500]}")  # e.g. 'API Error: Connection refused'
             for d in p.permission_denials:
                 p.diag.append(f"claude permission_denial: {json.dumps(d, ensure_ascii=False)[:500]}")
+    elif agent == "cursor":
+        objs, other = _jsonl(out)
+        p.diag.extend(other)
+        messages: list[str] = []
+        result_obj: dict[str, Any] | None = None
+        subagent = init = False
+        for o in objs:
+            kind = o.get("type")
+            if kind == "system" and o.get("subtype") == "init":
+                init = True
+                p.session_ref = o.get("session_id")
+                p.model_actual = o.get("model")
+            elif kind == "assistant":
+                message = o.get("message")
+                content = message.get("content") if isinstance(message, dict) else None
+                text = "".join(str(c.get("text") or "") for c in (content if isinstance(content, list) else [])
+                               if isinstance(c, dict) and c.get("type") == "text")
+                if text:
+                    messages.append(text)
+            elif kind == "tool_call":
+                call = o.get("tool_call")
+                call = call if isinstance(call, dict) else {}
+                if any(re.search(r"task|subagent", k, re.I) for k in call):
+                    subagent = True
+                if o.get("subtype") == "completed":
+                    for k, v in call.items():
+                        res = (v or {}).get("result") if isinstance(v, dict) else None
+                        if isinstance(res, dict) and ("rejected" in res or "error" in res):
+                            detail = f"cursor {k}: {json.dumps(res, ensure_ascii=False)[:500]}"
+                            (p.permission_denials if "rejected" in res else p.tool_output).append(detail)
+            elif kind == "result":
+                result_obj = o
+        # Without both the init and the terminal event the stream is incomplete, so subagent use stays unknown.
+        p.subagent_used = True if subagent else (False if init and result_obj is not None else None)
+        p.transcript = "\n\n".join(messages)
+        # A reviewer may put REVIEW and RESULT in separate messages: keep everything from the last REVIEW on.
+        start = max((i for i, m in enumerate(messages) if "## REVIEW" in m), default=len(messages) - 1)
+        p.final_text = "\n\n".join(messages[max(start, 0):])
+        if result_obj is None:
+            p.is_error = True
+            p.diag.append("cursor terminal result event is missing")
+        else:
+            p.session_ref = result_obj.get("session_id") or p.session_ref
+            p.tokens = _token_sum(result_obj.get("usage"), ("inputTokens", "outputTokens",
+                                                            "cacheReadTokens", "cacheWriteTokens"))
+            if result_obj.get("is_error") or result_obj.get("subtype") != "success":
+                p.is_error = True
+                p.diag.append(f"cursor result subtype={result_obj.get('subtype')}")
+            # The result text concatenates every assistant message; use it when the streamed tail has no complete
+            # footer (for example a footer split across messages). REVIEW parsing takes the last REVIEW block.
+            response = result_obj.get("result")
+            if (isinstance(response, str) and parse_result_block(p.final_text)["status"] is None
+                    and parse_result_block(response)["status"] is not None):
+                p.final_text = response
     elif agent == "copilot":
         objs, other = _jsonl(out)
         p.diag.extend(other)

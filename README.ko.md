@@ -4,13 +4,13 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776ab.svg)
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078d4.svg)
-![Version 0.1.0](https://img.shields.io/badge/version-0.1.0-informational.svg)
+![Version 0.1.1](https://img.shields.io/badge/version-0.1.1-informational.svg)
 
 [English](README.md) · **한국어**
 
 **AI 코딩 CLI 사이에서 범위가 정해진 작업을 맡기고, 결과를 검증하고, 근거를 프로젝트에 남깁니다.**
 
-cli-crew를 쓰면 지금 사용 중인 AI CLI(*메인*)가 Codex, Claude Code, Antigravity에 범위가 정해진 작업을 맡길 수 있습니다. 작은 단일 파일 수정에는 GitHub Copilot CLI를 워커로 지정할 수 있습니다. 스킬은 메인에게 언제 위임할 가치가 있는지와 결과를 어떻게 검증할지 알려 줍니다. Python CLI `crew`는 워커를 안전 모드로 실행하고, 시간 제한과 승인 조건을 지키게 하고, 파일 경계를 검사하고, 모든 실행을 기록합니다. 최종 판단은 언제나 메인이 합니다.
+cli-crew를 쓰면 지금 사용 중인 AI CLI(*메인*)가 Codex, Claude Code, Antigravity, Cursor CLI에 범위가 정해진 작업을 맡길 수 있습니다. 작은 단일 파일 수정에는 GitHub Copilot CLI를 워커로 지정할 수 있습니다. 스킬은 메인에게 언제 위임할 가치가 있는지와 결과를 어떻게 검증할지 알려 줍니다. Python CLI `crew`는 워커를 안전 모드로 실행하고, 시간 제한과 승인 조건을 지키게 하고, 파일 경계를 검사하고, 모든 실행을 기록합니다. 최종 판단은 언제나 메인이 합니다.
 
 ![메인이 계약을 정하고 워커가 실행한 뒤 메인이 결과를 검증하는 흐름](docs/assets/workflow.ko.svg)
 
@@ -20,7 +20,7 @@ cli-crew를 쓰면 지금 사용 중인 AI CLI(*메인*)가 Codex, Claude Code, 
 
 - **목표 중심 위임.** 사용자는 원하는 결과만 말하면 됩니다. 메인이 직접 할 일, 자기 서브에이전트에 맡길 일, 워커에 맡길 일, 그리고 다른 모델의 독립 리뷰가 추가 호출만큼의 가치가 있는지를 판단합니다.
 - **여러 단계 목표의 계획.** 메인은 시작하기 전에 단계마다 실행 주체(메인 자신, 메인의 내장 서브에이전트, crew 워커), 의존 단계, 검증 방법을 적은 계획(*cplan*)을 씁니다. 근거가 바뀌어 계획을 고치면 변경 내용과 이유를 기록합니다. 실행 기록이 단계에 연결되므로 인수인계 뒤에도 진행 상황이 남습니다.
-- **독립 검증.** 계획에는 산출물마다 저자와 다른 모델의 검증 단계를 둡니다. 생략하면 메인이 계획에 이유를 적습니다. `crew`는 검증 판정을 기록하고, 근거는 검증자 응답에 남습니다.
+- **독립 검증.** 계획에는 산출물마다 저자와 다른 모델의 검증 단계를 둡니다. 생략하면 메인이 계획에 이유를 적습니다. `crew`는 검증 판정을 기록하고, 근거는 검증자 응답에 남습니다. 검증 단계가 저자와 같은 모델로 실행될 수 있으면 `crew plan check`가 경고하고, 두 단계에 실행 기록이 생기면 보고된 실제 모델도 비교합니다. 워커가 계약과 다른 모델을 보고하면 실행 요약에 `MODEL WARNING`이 나옵니다.
 - **명시적인 작업 계약.** 위임하는 작업마다 Markdown 계약을 씁니다. 계약에는 목표, 참고할 파일 경로, 완료 조건이 들어가고, 수정 작업이면 워커가 바꿀 수 있는 경로도 들어갑니다.
 - **수락 전 검증.** `crew`는 실행을 분류하고 감지할 수 있는 범위 밖 변경과 서브에이전트 사용을 검사합니다. 메인은 수락 또는 반려를 기록하고 `--verified`로 직접 확인한 내용을 남길 수 있습니다.
 - **기본 안전장치.** 기본은 읽기 전용입니다. 쓰기는 한 번에 하나만 실행하고 워커 프로세스에서 자격 증명처럼 보이는 환경 변수를 제거합니다. 고비용 실행이나 프로젝트 지침에서 민감 데이터 단서를 감지한 위임은 사용자 승인이 필요합니다.
@@ -42,7 +42,7 @@ cli-crew를 쓰면 지금 사용 중인 AI CLI(*메인*)가 Codex, Claude Code, 
 **필요한 것**
 
 - Git, PowerShell 7(`pwsh`), Python 3.12 이상, [uv](https://docs.astral.sh/uv/)
-- 설치하고 로그인한 워커 CLI 하나 이상. [Codex CLI](https://github.com/openai/codex), Claude Code, Antigravity(`agy`) 또는 단일 파일 수정용 GitHub Copilot CLI 전용 프로필을 사용합니다.
+- 설치하고 로그인한 워커 CLI 하나 이상. [Codex CLI](https://github.com/openai/codex), Claude Code, Antigravity(`agy`), Cursor CLI(`cursor-agent`) 또는 단일 파일 수정용 GitHub Copilot CLI 전용 프로필을 사용합니다.
 
 **설치 명령**
 
@@ -59,6 +59,18 @@ crew --version
 
 설치 스크립트는 Claude Code, Codex, agy에 스킬을 등록합니다. 일부만 고르려면 `-Agents`를 지정하세요. 예: `pwsh -File scripts/install-skill.ps1 -Agents claude,codex`. Claude Code와 Codex는 복제한 폴더로 연결되는 디렉터리 정션을 쓰고, agy는 `~/.gemini/config/skills.json`에 스킬 경로를 등록합니다. 그래서 복제한 폴더는 같은 위치에 그대로 두어야 합니다. 새 터미널에서 `crew`를 찾지 못하면 `uv tool update-shell`을 실행하고 터미널을 다시 여세요.
 
+**macOS와 Linux(검증 안 됨)**
+
+스킬 설치 스크립트와 CLI 세션 공유는 Windows 전용입니다. `uv tool install ./crew`로 `crew`를 설치한 뒤, 복제한 폴더에서 스킬을 직접 연결하세요(`ln -sn`은 링크가 이미 있으면 중첩하지 않고 실패합니다).
+
+```sh
+mkdir -p ~/.claude/skills "${CODEX_HOME:-$HOME/.codex}/skills"
+ln -sn "$PWD/skill/cli-crew" ~/.claude/skills/cli-crew
+ln -sn "$PWD/skill/cli-crew" "${CODEX_HOME:-$HOME/.codex}/skills/cli-crew"
+```
+
+agy는 `~/.gemini/config/skills.json`의 `entries` 목록에 `{"path": "<복제 폴더>/skill"}`을 추가합니다. 이 문서의 `py -3`은 `python3`로 바꿔 실행하세요. macOS에서는 `crew cancel`이 워커 프로세스를 확인하지 못하므로, 남은 워커는 직접 종료하세요.
+
 ## 빠른 시작
 
 **작업할 프로젝트**에서 새 AI CLI 세션을 열고 원하는 결과를 말하세요.
@@ -74,8 +86,8 @@ crew --version
 | 메인 CLI | 호출 방법 | 검증 상태 |
 | --- | --- | --- |
 | Claude Code | `/cli-crew <목표>` | 대화형·헤드리스 세션에서 검증 |
-| Codex | `$cli-crew <목표>` | 스킬 로드는 검증, Codex를 메인으로 쓴 사례는 적음 |
-| Antigravity (`agy`) | 요청에 `cli-crew`를 포함 | 스킬 로드는 검증, agy를 메인으로 쓴 사례는 적음 |
+| Codex | `$cli-crew <목표>` | 메인으로 스킬을 따름. 대화형이나 네트워크가 허용된 환경에서 쓰세요. 기본 `codex exec` 샌드박스 안에서 띄운 워커는 제공업체에 연결하지 못하므로 `crew run`은 exit 3으로 멈추고 `crew detect`는 경고합니다 |
+| Antigravity (`agy`) | 요청에 `cli-crew`를 포함 | 스킬 로드는 검증. 메인으로는 대화형에서 쓰세요. 헤드리스 `agy --print`는 crew에 필요한 셸 명령을 거부합니다. 병렬 실행은 agy 자체 백그라운드 실행을 쓰세요. agy는 명령이 끝나면 `crew run --detach`로 띄운 실행도 종료합니다 |
 
 예: `/cli-crew CSV 내보내기 버그를 고치고, 수정한 내용은 다른 모델에게 리뷰받아 줘.`
 
@@ -85,7 +97,7 @@ crew --version
 
 ### 작은 수정에 GitHub Copilot CLI 쓰기
 
-PowerShell에서 대상 프로젝트 밖에 Copilot 전용 프로필을 지정합니다. 이 프로필에 한 번 로그인하고 훅을 끕니다.
+Windows PowerShell에서 대상 프로젝트 밖에 Copilot 전용 프로필을 지정합니다. 이 프로필에 한 번 로그인하고 훅을 끕니다.
 
 ```powershell
 $env:COPILOT_HOME = Join-Path $env:LOCALAPPDATA 'crew-copilot-profile'
@@ -118,7 +130,7 @@ crew run --contract .agent-runs/contracts/T-EDIT.md --with-result
 | 여러 단계 계획 | `crew plan new`, `crew plan check`, `crew plan show` |
 | 워커 선택 | `crew routing`, `crew compare` |
 | 계약 작성·검사 | `crew contract new`, `crew contract check` |
-| 실행·조회·취소 | `crew run`, `crew status`, `crew cancel`, `crew trace view` |
+| 실행·조회·취소 | `crew run`(`--detach`), `crew wait`, `crew status`, `crew cancel`, `crew trace view` |
 | 검증·판정 | `crew result`, `crew check`, `crew accept`, `crew reject` |
 | 인수인계·정리 | `crew handoff`, `crew clean` |
 
@@ -168,18 +180,19 @@ crew check T-01 --recheck
 | Codex (`codex`) | 지원 | 계약에 지정한 경로 | 사용자가 읽을 수 있는 모든 파일 |
 | Claude Code (`claude`) | 지원 | 계약에 지정한 경로 | 프로젝트와 지정한 디렉터리만 |
 | Antigravity (`agy`) | 지원 | 계약에 지정한 경로. 아래 경계 검사 한계를 참고하세요. | 사용자가 읽을 수 있는 모든 파일 |
+| Cursor CLI (`cursor`) | 지원 | 계약에 지정한 경로. 실행 후에만 검사합니다. 아래 경계 검사 한계를 참고하세요. | 사용자가 읽을 수 있는 모든 파일 |
 | GitHub Copilot CLI (`copilot`) | — | 기존 비밀 아닌 파일 하나 | 프로젝트 안의 파일 |
 
-어댑터는 codex-cli 0.171.0, agy 1.5.14, Claude Code 2.1.330, GitHub Copilot CLI 1.0.112에서 검증했습니다. CLI를 업그레이드하면 다시 확인하세요. [워커 어댑터 및 Copilot 설정](skill/cli-crew/references/adapters.md#github-copilot-cli-setup)
+어댑터는 codex-cli 0.172.0, agy 1.5.18, Claude Code 2.1.332, GitHub Copilot CLI 1.0.112, Cursor CLI 2026.11.22-e9042b2에서 검증했습니다. CLI를 업그레이드하면 다시 확인하세요. [워커 어댑터 및 Copilot 설정](skill/cli-crew/references/adapters.md#github-copilot-cli-setup)
 
 ## 안전 모델과 한계
 
-- **동시 실행.** 서로 독립적인 읽기 작업은 기본적으로 최대 3개까지 동시에 실행합니다(`max_concurrent`). 쓰기 작업은 항상 단독으로 실행합니다. 예약할 때 `.agent-runs/locks/reserve.lock`에 OS 파일 잠금을 걸며, 잠금을 가진 프로세스가 죽으면 잠금이 풀립니다. 같은 프로젝트에서 이전 버전 `crew`를 동시에 실행하지 마세요.
+- **동시 실행.** 서로 독립적인 읽기 작업은 기본적으로 최대 5개까지 동시에 실행합니다(`max_concurrent`). 메인의 토큰도 비용이므로 스킬은 독립적인 읽기를 기본으로 병렬 도우미에게 맡기며, 독립된 단계를 모두 메인이 맡으면 `crew plan check`가 경고합니다. 병렬 실행은 메인 CLI 자체 백그라운드 실행으로 시작하고, 그 기능이 없으면 `crew run --detach`로 시작한 뒤 `crew wait`로 기다립니다. 쓰기 작업은 항상 단독으로 실행합니다. 예약할 때 `.agent-runs/locks/reserve.lock`에 OS 파일 잠금을 걸며, 잠금을 가진 프로세스가 죽으면 잠금이 풀립니다. 같은 프로젝트에서 이전 버전 `crew`를 동시에 실행하지 마세요.
 - **셸 명령·빌드·테스트.** 워크플로에서는 메인이 실행합니다. Codex는 파일시스템 샌드박스로 실행하며, 워커에게 파일 도구를 쓰도록 지시합니다. 셸 제한은 CLI와 실행 환경에 따라 달라집니다. [워커 어댑터의 제한](skill/cli-crew/references/adapters.md#known-behaviour)
-- **경계 검사.** `crew`는 프로젝트 안에서 감지할 수 있는 변경을 보고합니다. 프로젝트 밖의 쓰기는 검사 범위 밖입니다. agy 세션별 설정은 프로젝트 밖 쓰기와 허용되지 않은 파일 덮어쓰기를 막습니다. agy는 프로젝트에 새 파일을 만들 수 있으며, Git 경계 검사는 비밀 파일 이름에 해당하는 경우를 제외하고 Git이 무시하는 파일을 건너뜁니다.
-- **웹 사용.** 워커는 공개 웹을 검색하고 읽을 수 있지만, 프로젝트 내용·비밀·개인정보를 보내는 것은 지침으로 금지합니다. `crew`가 네트워크를 차단하지는 않습니다. 각 CLI가 실제로 어디까지 가져올 수 있는지는 다시 검증하지 않았습니다.
-- **데이터가 외부로 전송됩니다.** 워커는 각자의 계정을 쓰므로 위임한 내용은 OpenAI, Anthropic, Google 또는 GitHub Copilot으로 전송됩니다. 프로젝트 지침에 민감한 데이터가 언급돼 있으면 `crew run`은 명시적인 승인을 요구합니다. 지침이 외부 에이전트 사용을 제한하면 메인이 위임하기 전에 묻습니다.
-- **비용 승인.** 높은 추론 수준이나 `~/.crew/config.toml`에 등록한 모델은 실행 전에 승인이 필요합니다.
+- **경계 검사.** `crew`는 프로젝트 안에서 감지할 수 있는 변경을 보고합니다. 프로젝트 밖의 쓰기는 검사 범위 밖입니다. agy 세션별 설정은 프로젝트 밖 쓰기와, 쓰기 경로 옆에 이미 있는 파일·폴더의 변경을 막습니다. agy는 프로젝트 루트나 쓰기 폴더 안처럼 그 밖의 위치에는 새 파일을 만들 수 있으며, Git 경계 검사는 비밀 파일 이름에 해당하는 경우를 제외하고 Git이 무시하는 파일을 건너뜁니다. 테스트에서 Cursor 편집 도구는 프로젝트 밖 수정을 거부했지만(사용자나 프로젝트 `cli.json`이 허용한 셸 명령은 해당하지 않음), 파일 권한 규칙이 다른 프로젝트 파일 수정을 막지 못했고 Windows에서는 샌드박스를 쓸 수 없습니다. 따라서 범위 밖 Cursor 수정은 실행 후에 보고만 됩니다.
+- **웹 사용.** 워커는 공개 웹을 검색하고 읽을 수 있지만, 프로젝트 내용·비밀·개인정보를 보내는 것은 지침으로 금지합니다. `crew`가 네트워크를 차단하지는 않습니다. 읽기 모드 시험(2026-11-26)에서는 Codex만 페이지를 열었고, Claude Code와 Antigravity 워커는 검색만 가능하고 페이지는 가져오지 못했습니다. Cursor는 시험하지 않았습니다.
+- **데이터가 외부로 전송됩니다.** 워커는 각자의 계정을 쓰므로 위임한 내용은 OpenAI, Anthropic, Google, GitHub Copilot 또는 Cursor(그리고 Cursor가 연결하는 모델 제공업체)로 전송됩니다. 프로젝트 지침에 민감한 데이터가 언급돼 있으면 `crew run`은 명시적인 승인을 요구합니다. 지침이 외부 에이전트 사용을 제한하면 메인이 위임하기 전에 묻습니다.
+- **비용 승인.** 높은 추론 수준이나 `~/.crew/config.toml`에 등록한 모델(대소문자 무시 앞부분 일치라서 `claude-opus-5-5`는 `claude-opus-5-5-high`도 포함)은 실행 전에 승인이 필요합니다. 목록이 설정돼 있으면 모델을 확정할 수 없는 실행(예: Copilot·Cursor Auto)도 승인이 필요합니다.
 - **자동 되돌리기 없음.** `crew`는 위반을 보고하지만 변경을 되돌리지는 않습니다.
 
 전체 규칙은 [검증·승인 규칙](skill/cli-crew/references/protocol.md)에 있습니다.
@@ -191,7 +204,7 @@ crew check T-01 --recheck
 | | 내장 서브에이전트 / 네이티브 스웜 | 자동화 우선 오케스트레이터 (예: oh-my-claudecode) | cli-crew |
 | --- | --- | --- | --- |
 | 핵심 목적 | 한 CLI 안에서 빠른 병렬 탐색과 구현 | 테스트·빌드가 통과할 때까지 에이전트 팀을 자율 실행 | 타사 모델 교차 감사, 범위가 제한된 위임, CLI 간 작업 인수인계 |
-| 제공업체·모델 | 현재 CLI의 모델 생태계 내부 | Claude Code가 외부 CLI를 호출 | Claude Code, Codex, Antigravity를 메인·워커로 사용. GitHub Copilot CLI는 작은 수정용 워커 |
+| 제공업체·모델 | 현재 CLI의 모델 생태계 내부 | Claude Code가 외부 CLI를 호출 | Claude Code, Codex, Antigravity를 메인·워커로 사용. Cursor CLI는 워커, GitHub Copilot CLI는 작은 수정용 워커 |
 | 워커 권한 | 세션 도구를 공유하거나 격리된 브랜치에서 실행 | 무인 실행을 위해 자동 승인 플래그를 쓸 수 있음 | 제한된 모드로 실행하고 계약으로 수정 범위를 정함. 셸 제한은 어댑터별로 다름. |
 | 수정·테스트 루프 | 워커가 직접 파일을 고치고 테스트까지 실행 가능 | 테스트·빌드·린트가 통과할 때까지 자동 검증·수정 루프 | 쓰기 작업은 한 번에 하나씩 실행. 테스트·빌드는 메인이 실행. |
 | 소통 방식 | 다회성 대화 또는 공유 메시지 보드 | 자동화된 다단계 루프 | 계약서 기반 단발성 실행 (`codex exec`, `claude -p`, `agy --print`, `copilot -p`) |
@@ -249,7 +262,7 @@ pwsh -File scripts/install-skill.ps1 -Uninstall -Agents codex
 
 ## 프로젝트 상태
 
-cli-crew는 초기 릴리스(0.1.0)입니다. Windows에서 설치, 재설치, 제거를 임시 홈 디렉터리로 테스트했습니다. macOS와 Linux는 아직 검증하지 않았습니다.
+cli-crew는 초기 릴리스(0.1.1)입니다. Windows에서 설치, 재설치, 제거를 임시 홈 디렉터리로 테스트했습니다. macOS와 Linux는 아직 검증하지 않았습니다.
 
 ## 개발
 

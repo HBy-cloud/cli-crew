@@ -14,7 +14,7 @@ from typing import Any
 from crew import adapters, classify, procutil, safety, snapshot, state as st
 from crew.common import (
     EXIT_CANCEL, EXIT_GUARD, EXIT_NOT_DONE, EXIT_OK, EXIT_USAGE, EXIT_VIOLATION, HIGH_EFFORTS,
-    CrewError, atomic_write_json, atomic_write_text, read_json, read_text,
+    CrewError, approval_match, atomic_write_json, atomic_write_text, read_json, read_text,
 )
 from crew.contract import CheckResult
 from crew.subagents import agy_conversation_paths, codex_rollouts
@@ -26,7 +26,7 @@ POLL_S = 0.5
 HEADER = """# WORKER INSTRUCTIONS (added by crew)
 
 You are a WORKER agent invoked non-interactively by a main agent. Follow these rules strictly:
-- Do not invoke any other AI CLI (codex, agy, claude, copilot, gemini).
+- Do not invoke any other AI CLI (codex, agy, claude, copilot, cursor-agent, gemini).
 - {subagent_rule}
 - Do not commit, push, install packages, or delete files.
 - You may use web search and page reading tools to read public information. Never send project content, file
@@ -88,16 +88,19 @@ def build_prompt(s: dict[str, Any], contract_body: str) -> str:
     return header + contract_body.strip() + "\n"
 
 
+def agy_allowed_paths(s: dict[str, Any]) -> list[str]:
+    """Project-relative paths an agy worker may write: the worker handoff file or the contract's write paths."""
+    if s.get("handoff_slot"):
+        return [s["handoff_slot"]]
+    if s["mode"] == "write":
+        return list(s.get("write_paths") or [])
+    return []
+
+
 def agy_settings_rules(root: Path, s: dict[str, Any]) -> list[str]:
     """write_file allow rules for agy: only the contract's write paths or the worker handoff file."""
-    if s.get("handoff_slot"):
-        paths = [s["handoff_slot"]]
-    elif s["mode"] == "write":
-        paths = list(s.get("write_paths") or [])
-    else:
-        paths = []
     rules = []
-    for p in paths:
+    for p in agy_allowed_paths(s):
         q = str(p).replace("\\", "/")
         if (root / q).is_dir() and not q.endswith("/"):
             q += "/"
@@ -108,15 +111,74 @@ def agy_settings_rules(root: Path, s: dict[str, Any]) -> list[str]:
 def write_agy_settings(runs: st.Runs, root: Path, s: dict[str, Any]) -> Path:
     """Per-session agy settings: confine file tools to the workspace and allow writes only to the contract paths.
 
-    Verified on agy 1.5.14: --settings overrides the user's allowNonWorkspaceAccess, and headless mode auto-denies
-    a write_file call that has no allow rule. New files inside the workspace are not prevented; the snapshot check still reports them.
+    Verified on agy 1.5.15 (2026-11-23): --settings overrides the user's allowNonWorkspaceAccess, so outside writes are
+    denied. Inside the workspace only the deny rules from agy_deny_rules stop overwrites of other files. New files
+    inside the workspace are not prevented; the snapshot check still reports them.
     """
     import json as _json
 
     path = runs.file(f"{s['task_id']}.agy-settings.json")
-    atomic_write_text(path, _json.dumps({"allowNonWorkspaceAccess": False,
-                                         "permissions": {"allow": agy_settings_rules(root, s)}}, indent=2) + "\n")
+    permissions = {"allow": agy_settings_rules(root, s)}
+    deny = agy_deny_rules(root, agy_allowed_paths(s))
+    if deny:
+        permissions["deny"] = deny
+    atomic_write_text(path, _json.dumps({"allowNonWorkspaceAccess": False, "permissions": permissions},
+                                        indent=2) + "\n")
     return path
+
+
+def agy_deny_rules(root: Path, allowed: list[str]) -> list[str]:
+    """Absolute write_file deny rules for every existing entry beside the path to each allowed file or folder.
+
+    On agy 1.5.15 in accept-edits mode, write_file and edit_file change any workspace file and allow rules do not
+    restrict that. An absolute write_file(<path>) deny rule covers both tools and the whole subtree, and deny beats
+    allow, so crew denies each sibling along every allowed path rather than the root. Entries created after launch
+    (new files) are not covered; the snapshot check reports them."""
+    if not allowed:
+        return []
+    chains = []
+    for p in allowed:
+        rel = os.path.normpath(str(p).replace("\\", "/").strip("/"))  # contract paths may contain '.' or '..'
+        parts = [os.path.normcase(x) for x in Path(rel).parts]
+        if not parts or parts == ["."] or parts[0] == ".." or Path(rel).is_absolute():
+            return []  # the root or a path outside it: nothing to deny without blocking the allowed path
+        chains.append(parts)
+    base = root.resolve()
+    targets = [(base / str(p).replace("\\", "/").strip("/")).resolve() for p in allowed]
+    if base in targets:
+        return []  # an alias of the root: the whole project is writable
+
+    def related(child: Path) -> bool:
+        """The entry is, contains or lies inside an allowed path after links resolve (validation uses that view)."""
+        try:
+            real = child.resolve()
+        except OSError:
+            return False
+        return any(real == t or real in t.parents or t in real.parents for t in targets)
+
+    keep = {tuple(parts[:i + 1]) for parts in chains for i in range(len(parts))}
+    whole = {tuple(parts) for parts in chains}  # allowed files or folders: never enumerate inside them
+    rules: set[str] = set()
+    for parts in chains:
+        parent = base
+        for i, name in enumerate(parts):
+            if any(tuple(parts[:j]) in whole for j in range(1, i + 1)):
+                break  # inside another allowed folder: everything below it stays writable
+            try:
+                children = list(parent.iterdir())
+            except OSError:  # missing (a path still to be created) or unreadable: nothing below it to protect
+                break
+            following = None
+            for child in children:  # rules use the names on disk, whatever case the contract used
+                if tuple(parts[:i]) + (os.path.normcase(child.name),) in keep:
+                    if os.path.normcase(child.name) == name:
+                        following = child
+                elif not related(child):
+                    rules.add("write_file(%s)" % str(child).replace("\\", "/"))
+            if following is None:
+                break
+            parent = following
+    return sorted(rules)
 
 
 def slug(text: str) -> str:
@@ -202,14 +264,15 @@ def cost_gate(s: dict[str, Any], cfg: dict[str, Any], approved: bool) -> str | N
         reasons.append(f"effort {s['effort']}")
     approval = cfg.get("approval_models") or []
     model = s.get("model") or default_model(s["agent"])
-    if s["agent"] == "copilot":
-        model = adapters.copilot_model(model)
+    if s["agent"] in ("copilot", "cursor"):
+        model = adapters.copilot_model(model)  # Auto is not a resolved model for either CLI
     s["model_resolved"] = model
     if approval:
         if model is None:
-            reasons.append("default model could not be determined while approval_models is set")
-        elif model in approval:
-            reasons.append(f"model {model} is in approval_models")
+            reasons.append("default model could not be determined while approval_models is set "
+                           "(name a model in the contract, or pass --approve-cost after the user approves)")
+        elif approval_match(model, approval):
+            reasons.append(f"model {model} matches approval_models entry {approval_match(model, approval)}")
     if reasons and not approved:
         return "; ".join(reasons)
     return None
@@ -249,7 +312,7 @@ def _subagent_evidence(agent: str, parsed: adapters.Parsed, started_epoch: float
         ev["children"] = [{"conversation_id": c} for c in parsed.subagent_ids]
         for cid in ([parsed.session_ref] if parsed.session_ref else []) + parsed.subagent_ids:
             ev["session_paths"] += agy_conversation_paths(cid)
-    elif agent in ("claude", "copilot"):
+    elif agent in ("claude", "copilot", "cursor"):
         ev["used"] = parsed.subagent_used
     return ev
 
@@ -440,6 +503,8 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
     reg = runs.registry()
     if st.rejected_chain_count(reg, s.get("retry_of")) >= 2:
         raise CrewError(EXIT_GUARD, "this task chain was already REJECTED twice; report to the user instead of re-delegating")
+    if safety.sandbox_network_disabled():
+        raise CrewError(EXIT_GUARD, safety.SANDBOX_MESSAGE)
     version = adapters.cli_version(s["agent"])
     if version is None:
         raise CrewError(EXIT_USAGE, f"{s['agent']} CLI is not available")
@@ -449,6 +514,7 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
         env = adapters.copilot_environment(env, root)
         s["copilot_target"] = str(chk.write_paths_abs[0])
     env["AGENT_ROLE"] = "WORKER"
+    env.pop("CREW_DETACH_TOKEN", None)  # belongs to the crew controller, not the worker
     env["PYTHONIOENCODING"] = "utf-8"
 
     started = trace_timestamp()
@@ -470,7 +536,10 @@ def run(root: Path, runs: st.Runs, chk: CheckResult, contract_body: str, cfg: di
         "override_reason": None, "worker_session_paths": [], "files": [f"{tid}.json"], "message": "",
         "data_sharing_approved": approve_data_sharing, "unbounded_write_allowed": allow_unbounded_write,
         "env_stripped": [],
+        "detach_token": os.environ.get("CREW_DETACH_TOKEN"),  # set by `crew run --detach` for its own child
     }
+    if state["detach_token"]:
+        _add_file(state, f"{tid}.detach-{state['detach_token'][:8]}.log")  # the controller log, for crew clean
     cancel_count = 0
     defer_signal = False
     previous_handlers = {}

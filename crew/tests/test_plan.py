@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from test_crew import Base, crew
+from crew import plan as pl  # noqa: E402  (test_crew puts src on sys.path)
 
 PLAN = """---
 plan_id: {pid}
@@ -165,6 +166,62 @@ class PlanTests(PlanHelpers, Base):
         self.assertEqual(code, 0)
         text = Path(out.strip()).read_text(encoding="utf-8")
         self.assertIn('plan: "P1"\nplan_step: "S2"\n', text)
+
+    def test_reviewer_step_contract_needs_review_kind(self):
+        path = self.write_plan()
+        path.write_text(path.read_text(encoding="utf-8")
+                        .replace("| task | verify |\n| --- | --- | --- | --- | --- | --- |",
+                                 "| task | verify | reviews |\n| --- | --- | --- | --- | --- | --- | --- |")
+                        .replace("checked against source |", "checked against source | S1 |")
+                        .replace("Paths cited exist |", "Paths cited exist | - |")
+                        .replace("Test suite passes |", "Test suite passes | - |"), encoding="utf-8")
+        p = self.linked_contract()
+        code, out, _ = crew("contract", "check", str(p))
+        self.assertEqual(code, 0, out)
+        self.assertIn("is a reviewer step (reviews S1); set task_kind: review", out)
+        p.write_text(p.read_text(encoding="utf-8").replace("ephemeral: false\n", "ephemeral: false\ntask_kind: review\n", 1),
+                     encoding="utf-8")
+        self.assertNotIn("is a reviewer step", crew("contract", "check", str(p))[1])
+
+    def test_plan_model_must_match_contract(self):
+        self.write_plan()  # S2 is crew:codex/default/low: the model is not compared; effort is never compared
+        p = self.linked_contract()
+        p.write_text(p.read_text(encoding="utf-8").replace("effort: low", "effort: medium", 1), encoding="utf-8")
+        self.assertNotIn("names", crew("contract", "check", str(p))[1])
+        self.write_plan(rows=ROWS.replace("crew:codex/default/low", "crew:codex/gpt-5.5"))
+        self.assertNotIn("names model", crew("contract", "check", str(p))[1])  # model: null is not compared
+        p.write_text(p.read_text(encoding="utf-8").replace("model: null", "model: gpt-5.4", 1), encoding="utf-8")
+        self.assertIn("names model gpt-5.5 but the contract uses gpt-5.4", crew("contract", "check", str(p))[1])
+        p.write_text(p.read_text(encoding="utf-8").replace("model: gpt-5.4", "model: GPT-5.5", 1), encoding="utf-8")
+        self.assertNotIn("names model", crew("contract", "check", str(p))[1])
+
+    def test_observed_models_judge_review_independence(self):
+        plan = pl.Plan(path=Path("x"), fields={}, sections={}, steps=[
+            pl.Step(step="S1", status="done", executor="crew:codex", depends_on=[], task="a", verify="v", reviews=[]),
+            pl.Step(step="S2", status="done", executor="crew:agy", depends_on=["S1"], task="r", verify="v",
+                    reviews=["S1"])])
+
+        def notes(author, reviewer, verdict="ACCEPTED"):
+            links = {"S1": [{"task_id": "A", "agent": "codex", "verdict": "ACCEPTED", "model": author}],
+                     "S2": [{"task_id": "B", "agent": "agy", "verdict": verdict, "model": reviewer}]}
+            return [n for n in pl.step_notes(plan, links) if "review" in n]
+        self.assertEqual(notes("gpt-6.2-sol", "gemini-4-neon-low"), [])
+        self.assertIn("same model as S1 (gpt-6.2-sol)", notes("gpt-6.2-sol", "GPT-6.2-sol")[0])
+        self.assertIn("Claude models", notes("claude-sonnet-5-5", "claude-opus-5-5")[0])
+        self.assertIn("not recorded", notes("gpt-6.2-sol", None)[0])
+        self.assertEqual(notes("gpt-6.2-sol", "gpt-6.2-sol", verdict="REJECTED"), [])
+        self.assertEqual(notes("a", "x,b"), [])
+        self.assertTrue(notes("a,b", "b"))
+
+    def test_step_status_drift_notes(self):
+        self.write_plan()
+        os.environ["FAKE_SCENARIO"] = "done"
+        self.assertEqual(crew("run", "--contract", str(self.linked_contract()))[0], 0)
+        notes = json.loads(crew("plan", "show", "P1", "--json")[1])["notes"]
+        self.assertIn("S2: has linked runs but is still marked todo; set it to doing", notes)
+        self.write_plan(rows=ROWS.replace("| S2 | todo |", "| S2 | done |"))
+        notes = json.loads(crew("plan", "show", "P1", "--json")[1])["notes"]
+        self.assertIn("S2: marked done but runs are not judged yet: T-1", notes)
 
     def test_show_links_runs_ready_steps_and_notes(self):
         self.write_plan()
@@ -354,6 +411,26 @@ class ReviewerTests(PlanHelpers, Base):
         self.assertNotIn("step S3 has no reviewer step", text)
         self.assertNotIn("not an accepted reason", text)
 
+    def test_independent_main_steps_need_parallel_or_a_reason(self):
+        self.runs.ensure()
+        path = self.runs.plan_path("P2")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rows = ("| S1 | todo | main | - | read a | ok | - |\n| S2 | todo | main | - | read b | ok | - |\n"
+                "| S3 | todo | main | S1, S2 | edit | ok | - |\n| R1 | todo | crew:codex | S3 | review | ok | S1, S2, S3 |\n")
+        def plan(revisions=""):
+            return ("---\nplan_id: \"P2\"\nstatus: active\n---\n## Goal\ng\n\n## Steps\n"
+                    "| step | status | executor | depends_on | task | verify | reviews |\n| --- | --- | --- | --- | --- | --- | --- |\n"
+                    + rows + "\n## Revisions\n| date | change | reason or evidence |\n| --- | --- | --- |\n" + revisions
+                    + "\n## Approvals\n- none\n")
+        path.write_text(plan(), encoding="utf-8")
+        self.assertIn("steps S1, S2 run on main but do not depend on each other", " | ".join(self.warnings()))
+        path.write_text(plan("| 2026-11-26 | no parallel | small steps |\n"), encoding="utf-8")
+        self.assertIn("'small' or 'simple' is not an accepted reason to keep independent work", " | ".join(self.warnings()))
+        path.write_text(plan("| 2026-11-26 | no parallel | S1 and S2 run shell tests |\n"), encoding="utf-8")
+        self.assertNotIn("do not depend on each other", " | ".join(self.warnings()))
+        path.write_text(plan().replace("| S2 | todo | main | - |", "| S2 | todo | main | S1 |"), encoding="utf-8")
+        self.assertNotIn("do not depend on each other", " | ".join(self.warnings()))
+
     def test_reviewer_independence_by_model(self):
         from crew.plan import _same_model
         self.assertIsNone(_same_model("crew:codex/gpt-a/low", "crew:codex/gpt-b"))
@@ -362,6 +439,13 @@ class ReviewerTests(PlanHelpers, Base):
         self.assertEqual(_same_model("crew:codex/GPT-A/low", "crew:codex/gpt-a/high"), "codex/GPT-A")
         self.assertEqual(_same_model("crew:codex/default/low", "crew:codex"), "codex/default")
         self.assertIn("may be the same", _same_model("crew:codex/gpt-a", "crew:codex/default"))
+        self.assertIn("both run Claude", _same_model("crew:agy/claude-sonnet-5-5-low", "crew:claude/opus"))
+        self.assertIn("both run Claude", _same_model("crew:cursor/claude-opus-5-thinking-high", "crew:claude"))
+        self.assertIsNone(_same_model("crew:agy/gemini-4-neon-low", "crew:claude"))
+        self.assertIn("Cursor can use", _same_model("crew:cursor", "crew:codex"))
+        self.assertIsNone(_same_model("crew:cursor/gpt-5.2", "crew:codex/gpt-6.2-sol"))
+        self.assertIn("both run Claude", _same_model("crew:claude/opus", "crew:claude/sonnet"))
+        self.assertIn("may be the same", _same_model("crew:cursor/auto", "crew:cursor/gpt-5.2"))
         self.runs.ensure()
         path = self.runs.plan_path("P2")
         path.parent.mkdir(parents=True, exist_ok=True)

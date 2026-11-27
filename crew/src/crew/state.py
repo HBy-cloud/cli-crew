@@ -87,7 +87,7 @@ class Runs:
         for p in sorted(self.dir.glob("*.json")):
             try:
                 data = read_json(p)
-            except (OSError, json.JSONDecodeError):
+            except (OSError, ValueError):  # ValueError covers JSON and UTF-8 decoding errors
                 continue
             if isinstance(data, dict) and data.get("task_id") == p.stem:
                 yield data

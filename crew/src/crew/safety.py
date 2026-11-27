@@ -13,7 +13,7 @@ INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md", "GEMINI.md")
 
 RESTRICT_RE = re.compile(
     r"(non-?interactive|비대화형|external agent|외부 (에이전트|프로세스)|agent process|background service|"
-    r"delegat|위임|subagent|helper agent|codex exec|\bagy\b|copilot|claude -p|other ai)", re.I)
+    r"delegat|위임|subagent|helper agent|codex exec|\bagy\b|copilot|cursor-agent|claude -p|other ai)", re.I)
 NEG_RE = re.compile(
     r"(must not|do not|don't|never|not be introduced|without|금지|않|하지 마|별도 요청|only when|"
     r"requires? (approval|permission))", re.I)
@@ -36,6 +36,7 @@ OWN_PROVIDER_ENV = {
     "codex": {"OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "OPENAI_PROJECT", "CODEX_API_KEY"},
     "agy": {"GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT"},
     "claude": {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"},
+    "cursor": {"CURSOR_API_KEY"},
 }
 
 
@@ -91,6 +92,16 @@ def scan_instructions(dirs: list[Path]) -> dict[str, list[str]]:
 def is_secret_env(name: str) -> bool:
     up = name.upper()
     return any(fnmatch.fnmatchcase(up, pat) for pat in SECRET_ENV_PATTERNS)
+
+
+SANDBOX_MESSAGE = ("crew is running inside a network-disabled Codex sandbox (CODEX_SANDBOX_NETWORK_DISABLED=1); "
+                   "workers it launches cannot reach their providers. Run the main CLI with network access or "
+                   "interactively, or do the task without workers")
+
+
+def sandbox_network_disabled(env: dict[str, str] | None = None) -> bool:
+    """True inside a codex sandbox without network (set for child processes; verified on codex 0.172.0)."""
+    return (env if env is not None else os.environ).get("CODEX_SANDBOX_NETWORK_DISABLED") == "1"
 
 
 def worker_env(agent: str, base: dict[str, str], passthrough: list[str] | None = None) -> tuple[dict[str, str], list[str]]:

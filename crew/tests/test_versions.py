@@ -4,9 +4,10 @@ import json
 import os
 import sys
 import unittest
+from pathlib import Path
 
 from test_crew import FAKE, Base, crew
-from crew import adapters
+from crew import adapters, common
 
 
 class VersionWarningUnitTests(unittest.TestCase):
@@ -44,3 +45,34 @@ class VersionWarningCliTests(Base):
         want = adapters.VERIFIED_VERSIONS["codex"]
         self.assertIn("differs", adapters.version_warning("codex", f"codex-cli {want}-beta.1"))
         self.assertIsNone(adapters.version_warning("codex", f"codex-cli {want}"))
+
+
+REPO = Path(__file__).resolve().parents[2]
+
+
+def doc_drift(root: Path) -> list[str]:
+    """Places where the published docs no longer match the code constants."""
+    problems = []
+    if set(adapters.VERIFIED_VERSIONS) != set(common.AGENTS):
+        problems.append("VERIFIED_VERSIONS does not cover exactly the AGENTS list")
+    read = lambda rel: (root / rel).read_text(encoding="utf-8")
+    for rel in ("README.md", "README.ko.md", "skill/cli-crew/references/adapters.md"):
+        text = read(rel)
+        problems += [f"{rel}: {agent} {v} missing" for agent, v in adapters.VERIFIED_VERSIONS.items()
+                     if f" {v}" not in text]
+    n = common.DEFAULT_CONFIG["max_concurrent"]
+    for rel, needle in (("crew/README.md", f"max_concurrent = {n}\n"), ("crew/README.ko.md", f"max_concurrent = {n}\n"),
+                        ("skill/cli-crew/references/protocol.md", f"`max_concurrent` (default {n})"),
+                        ("skill/cli-crew/SKILL.md", f"Up to {n} read tasks")):
+        if needle not in read(rel).replace("\r\n", "\n"):
+            problems.append(f"{rel}: {needle.strip()!r} missing")
+    lines = len(read("skill/cli-crew/SKILL.md").splitlines())
+    if lines > 150:
+        problems.append(f"skill/cli-crew/SKILL.md: {lines} lines (at most 150)")
+    return problems
+
+
+@unittest.skipUnless((REPO / "skill/cli-crew/SKILL.md").is_file(), "docs not present (installed package)")
+class DocSyncTests(unittest.TestCase):
+    def test_docs_match_code_constants(self):
+        self.assertEqual(doc_drift(REPO), [])

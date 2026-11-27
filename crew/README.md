@@ -3,7 +3,7 @@
 **English** · [한국어](README.ko.md)
 
 Python CLI behind the `cli-crew` skill. It lets a main AI CLI delegate bounded tasks to worker CLIs
-(`codex`, `agy`, `claude`, and `copilot` for single-file edits) in safe, non-interactive modes and records verifiable results.
+(`codex`, `agy`, `claude`, `cursor`, and `copilot` for single-file edits) in safe, non-interactive modes and records verifiable results.
 [Worker protocol](../skill/cli-crew/references/protocol.md) · [Skill instructions](../skill/cli-crew/SKILL.md) · [Windows installation](../README.md)
 
 ## Install (development)
@@ -47,6 +47,8 @@ agy write tasks run with a per-session `--settings` file that confines writes to
 
 For a small edit, explicitly select `--agent copilot --mode write --write <file>`. The file must already exist and the contract must use `effort: low`. [Dedicated Copilot profile setup](../skill/cli-crew/references/adapters.md#github-copilot-cli-setup)
 
+`--agent cursor` runs `cursor-agent` in ask mode for reads and agent mode for writes. Cursor write paths are checked only after the run. [Cursor CLI notes](../skill/cli-crew/references/adapters.md#cursor-cli)
+
 Safety flags for `crew run` (ask the user first): `--approve-data-sharing` (instructions mention personal/sensitive
 data), `--approve-cost` (high effort / approval models).
 Credential-like environment variables are removed from the worker environment (except the worker's own provider key).
@@ -60,34 +62,36 @@ Run commands from the target project. Replace uppercase placeholders with your v
 | `crew init` | Create missing project instructions; reuse existing guides. |
 | `crew detect [--paths PATH ...] [--json]` | List available workers, applicable instructions and active runs. |
 | `crew plan new ID` | Create a plan template under `.agent-runs/plans/` for a multi-step goal. |
-| `crew plan check ID [--json]` | Validate a plan: step ids, executors, dependencies, verification entries. |
+| `crew plan check ID [--json]` | Validate a plan: step ids, executors, dependencies, verification entries. Warns when independent steps all stay on main or a review ran on the same recorded model as the reviewed step. |
 | `crew plan show [ID] [--json]` | List plans, or show one plan with linked runs, ready steps and status mismatches. |
 | `crew contract new ID [--agent CLI] [--mode MODE] [--kind KIND] [--write PATH ...] [--plan ID --step STEP]` | Create the contract template, optionally linked to a plan step. Fill in the objective, context and completion criteria before running. |
 | `crew routing --kind KIND --mode MODE [--json]` | Show up to ten recent completed worker runs with matching mode and kind (investigate, implement, review, document, other). |
 | `crew compare ID... [--json]` | Compare verification evidence, violations, worker time and provider-specific usage for completed runs. |
 | `crew contract check FILE [--agent CLI] [--effort LEVEL] [--model MODEL] [--json]` | Validate a contract without starting a worker. |
-| `crew run --contract FILE [--agent CLI] [--effort LEVEL] [--model MODEL] [--timeout MIN] [--with-result] [--json] [--approve-cost] [--approve-data-sharing]` | Start the worker and wait for its result. Timeout is in minutes. The legacy --allow-unbounded-write flag is deprecated and ignored. |
+| `crew run --contract FILE [--agent CLI] [--effort LEVEL] [--model MODEL] [--timeout MIN] [--with-result] [--detach] [--json] [--approve-cost] [--approve-data-sharing]` | Start the worker and wait for its result (`--detach`: return once the worker started, then `crew wait`; prefer your CLI's own background mode, since some shells such as interactive agy stop detached runs). With `--with-result`, read tasks also list unverified file/line citations. The summary shows `MODEL WARNING` when the worker reports a different model than requested. Timeout is in minutes. The legacy --allow-unbounded-write flag is deprecated and ignored. |
+| `crew wait [ID...] [--any] [--timeout-min MIN] [--with-result] [--json]` | Wait for running tasks (default: all running, 8 minutes, at most 60) without stopping them. Exit 0 when they finished, 10 when the timeout passed with tasks still running. |
 | `crew status [--all] [--json]` | Show current and recent task states; use --all for older tasks. |
 | `crew result ID [--raw]` | Read the saved worker result; --raw shows the full response. |
 | `crew check ID [--recheck] [--json]` | Inspect the run checks. Recheck uses saved evidence. |
 | `crew accept ID [--verified TEXT] [--override --reason TEXT]` | Record acceptance. Supply actual verification for a partial or unverified result. |
 | `crew reject ID --reason TEXT` | Reject the result and record why. |
-| `crew cancel ID [--target IDENTITY] [--yes]` | Preview the worker tree. After approval, use the printed confirmation command to stop that worker. |
+| `crew cancel ID [--target IDENTITY] [--yes]` | Preview the worker tree. After approval, use the printed confirmation command to stop that worker. On macOS the worker identity cannot be confirmed, so stop it yourself. |
 | `crew trace view [--port PORT] [--interactive codex]` | Open Crew Runs on loopback. The optional Windows mode shares a new Codex CLI session. |
 | `crew handoff --agent NAME --task SLUG --status STATUS [--since ISO_OR_LAST] [--tasks ID,ID] [--lang LANG]` | Draft a handoff for the next session. Use en or ko; status is Done, "In progress", or Blocked. |
+| `crew handoff --check [PATH]` | List TODO placeholders left in a handoff (default: the latest); exits 2 if any remain. |
 | `crew clean [--sessions] [--runs] [--older-than DAYS] [--yes] [--json]` | Preview cleanup of eligible records. The age threshold defaults to 7 days; --yes applies the plan. `--runs` keeps `history.jsonl`, `locks/` and `contracts/<task_id>.md`. |
 
 Optional config `~/.crew/config.toml`:
 ```toml
-max_concurrent = 3
+max_concurrent = 5
 default_timeout_min = 20
 default_effort = "low"
-approval_models = []        # model ids that need --approve-cost
+approval_models = []        # model id prefixes that need --approve-cost (case-insensitive)
 agy_prompt_mode = "file"    # or "inline"
 env_passthrough = []        # extra credential-like env var names to pass to workers
 ```
 
-`crew detect` warns when an API key variable is set (`OPENAI_API_KEY`, `CODEX_API_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`), because a worker may then bill the API instead of your subscription. If `config.toml`, or the state file of the task a command works on, cannot be parsed, `crew` exits with code 2 and prints the file path instead of a traceback; fix or move that file. Listing commands such as `crew status` skip unreadable state files.
+`crew detect` warns when an API key variable is set (`OPENAI_API_KEY`, `CODEX_API_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `CURSOR_API_KEY`), because a worker may then bill the API instead of your subscription. If `config.toml`, or the state file of the task a command works on, cannot be parsed, `crew` exits with code 2 and prints the file path instead of a traceback; fix or move that file. Listing commands such as `crew status` skip unreadable state files.
 
 ## Live trace viewer
 

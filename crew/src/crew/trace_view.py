@@ -133,11 +133,11 @@ def create_server(runs, display_status, port: int, *, terminal: TerminalSession 
         def do_POST(self):
             host = f"127.0.0.1:{self.server.server_port}"
             if self.headers.get("Host") != host or self.headers.get("Origin") != f"http://{host}":
-                self.send_error(403)
+                self.reject_post(403)
                 return
             terminal_input = self.path == "/api/terminal/input" and terminal is not None
             if self.path != "/api/commands" and not terminal_input:
-                self.send_error(404)
+                self.reject_post(404)
                 return
             self.connection.settimeout(5)
             try:
@@ -163,6 +163,18 @@ def create_server(runs, display_status, port: int, *, terminal: TerminalSession 
             data = json.dumps(response).encode("utf-8")
             self.send_headers("application/json", len(data), status=status)
             self.wfile.write(data)
+
+        def reject_post(self, code: int) -> None:
+            # Read a small body first: on Windows, closing a socket with unread data resets it and the
+            # client can lose this reply.
+            self.connection.settimeout(5)
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if 0 < length <= 16384:
+                    self.rfile.read(length)
+            except (ValueError, OSError):
+                pass
+            self.send_error(code)
 
         def do_GET(self):
             host = f"127.0.0.1:{self.server.server_port}"

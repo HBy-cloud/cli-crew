@@ -5,7 +5,7 @@
 .DESCRIPTION
   The repository's skill folder stays the single source; nothing is copied.
     claude : junction  ~/.claude/skills/cli-crew  -> <repo>/skill/cli-crew
-    codex  : junction  ~/.codex/skills/cli-crew   -> <repo>/skill/cli-crew
+    codex  : junction  ~/.codex/skills/cli-crew   -> <repo>/skill/cli-crew  ($CODEX_HOME/skills when set)
     agy    : entry in  ~/.gemini/config/skills.json pointing at <repo>/skill
              (agy does not follow junctions in ~/.gemini/config/skills; verified 2026-11-21)
   Existing files that this script did not create are never overwritten. An existing agy skills.json is
@@ -120,7 +120,7 @@ function Uninstall-Agy($dir) {
 
 $dirs = @{
   claude = Join-Path $HomeDir '.claude\skills'
-  codex  = Join-Path $HomeDir '.codex\skills'
+  codex  = if ($env:CODEX_HOME -and -not $PSBoundParameters.ContainsKey('HomeDir')) { [System.IO.Path]::Combine($env:CODEX_HOME, 'skills') } else { Join-Path $HomeDir '.codex\skills' }
   agy    = Join-Path $HomeDir '.gemini\config'
 }
 foreach ($a in $Agents) {
